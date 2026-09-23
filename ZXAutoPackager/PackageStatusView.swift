@@ -14,6 +14,16 @@ struct PackageStatusView: View {
                     Text("进程运行中 · 已用时 \(viewModel.elapsedTimeText)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                } else if let summary = viewModel.packageSummary {
+                    HStack(spacing: 8) {
+                        Label(summary.fileSize, systemImage: "internaldrive")
+                        Text("v\(summary.version)")
+                        Text("Build \(summary.buildNumber)")
+                        Text(summary.configuration)
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .help(summary.fileName)
                 }
             }
             Spacer()
@@ -27,16 +37,23 @@ struct PackageStatusView: View {
                 Button("在 Finder 中显示", action: viewModel.revealArtifact)
             }
 
-            Button(action: viewModel.startPackaging) {
-                Label(
-                    viewModel.isPackaging ? "正在打包" : "开始打包",
-                    systemImage: "hammer.fill"
-                )
-                .frame(minWidth: 100)
+            if viewModel.isPackaging {
+                Button(role: .destructive, action: viewModel.stopPackaging) {
+                    Label("停止打包", systemImage: "stop.fill")
+                        .frame(minWidth: 100)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.large)
+            } else {
+                Button(action: viewModel.startPackaging) {
+                    Label("开始打包", systemImage: "hammer.fill")
+                        .frame(minWidth: 100)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!viewModel.canPackage)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!viewModel.canPackage)
         }
         .padding(18)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))

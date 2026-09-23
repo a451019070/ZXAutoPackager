@@ -21,6 +21,22 @@ private final class BuildLogBuffer: @unchecked Sendable {
     }
 }
 
+private final class ScopedDirectoryAccess: @unchecked Sendable {
+    let url: URL
+    private let isAccessing: Bool
+
+    init(url: URL) {
+        self.url = url
+        isAccessing = url.startAccessingSecurityScopedResource()
+    }
+
+    func stop() {
+        if isAccessing {
+            url.stopAccessingSecurityScopedResource()
+        }
+    }
+}
+
 struct PackageRequest: Sendable {
     let containerPath: String
     let scheme: String
@@ -32,13 +48,26 @@ struct PackageRequest: Sendable {
 
 struct PackageResult: Sendable {
     let artifactPath: String
+    let fileSize: Int64
+    let versionNumber: String
+    let buildNumber: Int
+    let configuration: String
     let log: String
+}
+
+struct PackageSummary: Sendable {
+    let fileName: String
+    let fileSize: String
+    let version: String
+    let buildNumber: Int
+    let configuration: String
 }
 
 enum PackageError: LocalizedError {
     case invalidInput(String)
     case commandFailed(Int32, String)
     case productNotFound(String)
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -48,6 +77,8 @@ enum PackageError: LocalizedError {
             return "构建失败（退出码 \(code)）\n\(log)"
         case .productNotFound(let log):
             return "归档完成，但没有找到导出的 .ipa。\n\(log)"
+        case .cancelled:
+            return "打包已由用户停止。"
         }
     }
 }
@@ -93,6 +124,7 @@ final class PackagerViewModel: ObservableObject {
     @Published var statusMessage = "请选择工程和导出目录"
     @Published var log = ""
     @Published var lastArtifactPath: String?
+    @Published var packageSummary: PackageSummary?
     @Published var pgyerDownloadURL: String?
     @Published var isShowingQRCode = false
 
@@ -103,6 +135,8 @@ final class PackagerViewModel: ObservableObject {
         static let versionNumber = "ZXAutoPackager.versionNumber"
         static let buildNumber = "ZXAutoPackager.buildNumber"
         static let outputDirectory = "ZXAutoPackager.outputDirectory"
+        static let projectBookmark = "ZXAutoPackager.projectBookmark"
+        static let outputBookmark = "ZXAutoPackager.outputBookmark"
         static let uploadToPgyer = "ZXAutoPackager.uploadToPgyer"
         static let pgyerAPIKey = "ZXAutoPackager.pgyerAPIKey"
         static let updateDescription = "ZXAutoPackager.updateDescription"
@@ -113,10 +147,14 @@ final class PackagerViewModel: ObservableObject {
     private let maximumLogLength = 300_000
     private var logRefreshTask: Task<Void, Never>?
     private var elapsedTimeTask: Task<Void, Never>?
+    private var packageTask: Task<Void, Never>?
+    private var cancellationController: BuildCancellationController?
 
     deinit {
         logRefreshTask?.cancel()
         elapsedTimeTask?.cancel()
+        packageTask?.cancel()
+        cancellationController?.cancel()
     }
 
     init() {
@@ -174,8 +212,10 @@ final class PackagerViewModel: ObservableObject {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = false
         panel.allowsMultipleSelection = false
+        panel.directoryURL = safePickerDirectory(preferredPath: containerPath)
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        saveBookmark(for: url, key: Keys.projectBookmark)
         containerPath = url.path
         if scheme.isEmpty {
             scheme = url.lastPathComponent
@@ -191,8 +231,10 @@ final class PackagerViewModel: ObservableObject {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
+        panel.directoryURL = safePickerDirectory(preferredPath: outputDirectory)
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        saveBookmark(for: url, key: Keys.outputBookmark)
         outputDirectory = url.path
         statusMessage = "导出目录已选择"
     }
@@ -211,13 +253,24 @@ final class PackagerViewModel: ObservableObject {
             return
         }
 
+        guard let projectAccess = restoreAccess(
+            bookmarkKey: Keys.projectBookmark,
+            fallbackPath: containerPath
+        ), let outputAccess = restoreAccess(
+            bookmarkKey: Keys.outputBookmark,
+            fallbackPath: outputDirectory
+        ) else {
+            statusMessage = "目录授权已失效，请重新选择项目文件夹和导出目录"
+            return
+        }
+
         let request = PackageRequest(
-            containerPath: containerPath,
+            containerPath: projectAccess.url.path,
             scheme: scheme.trimmingCharacters(in: .whitespacesAndNewlines),
             configuration: configuration.rawValue,
             versionNumber: versionNumber.trimmingCharacters(in: .whitespacesAndNewlines),
             buildNumber: build,
-            outputDirectory: outputDirectory
+            outputDirectory: outputAccess.url.path
         )
 
         let shouldUploadToPgyer = uploadToPgyer
@@ -231,6 +284,7 @@ final class PackagerViewModel: ObservableObject {
         elapsedSeconds = 0
         startElapsedTimer()
         lastArtifactPath = nil
+        packageSummary = nil
         pgyerDownloadURL = nil
         log = ""
         statusMessage = "正在归档并导出 \(configuration.rawValue) IPA…"
@@ -238,11 +292,22 @@ final class PackagerViewModel: ObservableObject {
         let logBuffer = BuildLogBuffer()
         startLogRefresh(from: logBuffer)
 
-        Task.detached(priority: .userInitiated) {
+        let cancellation = BuildCancellationController()
+        cancellationController = cancellation
+        packageTask = Task.detached(priority: .userInitiated) {
+            defer {
+                projectAccess.stop()
+                outputAccess.stop()
+            }
             do {
-                let packageResult = try XcodePackager.package(request) { chunk in
+                let packageResult = try XcodePackager.package(
+                    request,
+                    cancellation: cancellation
+                ) { chunk in
                     logBuffer.append(chunk)
                 }
+                try Task.checkCancellation()
+                guard !cancellation.isCancelled else { throw PackageError.cancelled }
 
                 var uploadResult: PgyerUploadResult?
                 if shouldUploadToPgyer {
@@ -260,7 +325,19 @@ final class PackagerViewModel: ObservableObject {
                     self.finishLogRefresh(from: logBuffer)
                     self.stopElapsedTimer()
                     self.isPackaging = false
+                    self.packageTask = nil
+                    self.cancellationController = nil
                     self.lastArtifactPath = packageResult.artifactPath
+                    self.packageSummary = PackageSummary(
+                        fileName: URL(fileURLWithPath: packageResult.artifactPath).lastPathComponent,
+                        fileSize: ByteCountFormatter.string(
+                            fromByteCount: packageResult.fileSize,
+                            countStyle: .file
+                        ),
+                        version: packageResult.versionNumber,
+                        buildNumber: packageResult.buildNumber,
+                        configuration: packageResult.configuration
+                    )
                     self.pgyerDownloadURL = uploadResult?.downloadURL
                     if let uploadResult {
                         self.statusMessage = "上传成功：\(uploadResult.appName) \(uploadResult.version)"
@@ -275,12 +352,27 @@ final class PackagerViewModel: ObservableObject {
                     self.finishLogRefresh(from: logBuffer)
                     self.stopElapsedTimer()
                     self.isPackaging = false
-                    let summary = self.errorSummary(error)
-                    self.appendLog("\n\n===== 打包失败 =====\n\(summary)\n")
-                    self.statusMessage = "打包失败，请查看日志末尾"
+                    self.packageTask = nil
+                    self.cancellationController = nil
+                    if error is CancellationError || cancellation.isCancelled {
+                        self.appendLog("\n===== 已停止打包 =====\n")
+                        self.statusMessage = "打包已停止"
+                    } else {
+                        let summary = self.errorSummary(error)
+                        self.appendLog("\n\n===== 打包失败 =====\n\(summary)\n")
+                        self.statusMessage = "打包失败，请查看日志末尾"
+                    }
                 }
             }
         }
+    }
+
+    func stopPackaging() {
+        guard isPackaging else { return }
+        statusMessage = "正在停止打包…"
+        appendLog("\n正在停止当前任务…\n")
+        cancellationController?.cancel()
+        packageTask?.cancel()
     }
 
     private func startElapsedTimer() {
@@ -336,6 +428,77 @@ final class PackagerViewModel: ObservableObject {
             return "归档完成，但没有找到导出的 IPA。"
         }
         return error.localizedDescription
+    }
+
+    private func safePickerDirectory(preferredPath: String) -> URL {
+        let homeURL = FileManager.default.homeDirectoryForCurrentUser
+        guard !preferredPath.isEmpty else { return homeURL }
+
+        let preferredURL = URL(fileURLWithPath: preferredPath, isDirectory: true).standardizedFileURL
+        return isInsideDesktop(preferredURL) ? homeURL : preferredURL
+    }
+
+    private func isInsideDesktop(_ url: URL) -> Bool {
+        let desktopURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop", isDirectory: true)
+            .standardizedFileURL
+        let path = url.standardizedFileURL.path
+        return path == desktopURL.path || path.hasPrefix(desktopURL.path + "/")
+    }
+
+    private func saveBookmark(for url: URL, key: String) {
+        do {
+            let data = try url.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            defaults.set(data, forKey: key)
+        } catch {
+            statusMessage = "无法保存目录授权：\(error.localizedDescription)"
+        }
+    }
+
+    private func restoreAccess(
+        bookmarkKey: String,
+        fallbackPath: String
+    ) -> ScopedDirectoryAccess? {
+        if !fallbackPath.isEmpty,
+           isInsideDesktop(URL(fileURLWithPath: fallbackPath, isDirectory: true)) {
+            defaults.removeObject(forKey: bookmarkKey)
+            statusMessage = "为避免系统桌面访问提示，请将项目和导出目录移出桌面后重新选择"
+            return nil
+        }
+
+        if let data = defaults.data(forKey: bookmarkKey) {
+            do {
+                var isStale = false
+                let url = try URL(
+                    resolvingBookmarkData: data,
+                    options: [.withSecurityScope],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                )
+                if isStale {
+                    saveBookmark(for: url, key: bookmarkKey)
+                }
+                return ScopedDirectoryAccess(url: url)
+            } catch {
+                defaults.removeObject(forKey: bookmarkKey)
+            }
+        }
+
+        guard !fallbackPath.isEmpty else { return nil }
+        let fallbackURL = URL(fileURLWithPath: fallbackPath, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: fallbackURL.path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            statusMessage = "目录不存在，请重新选择：\(fallbackPath)"
+            return nil
+        }
+        return ScopedDirectoryAccess(url: fallbackURL)
     }
 
     func showPgyerQRCode() {

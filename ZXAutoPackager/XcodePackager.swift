@@ -1,5 +1,47 @@
 import Foundation
 
+final class BuildCancellationController: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func register(_ process: Process) {
+        lock.lock()
+        self.process = process
+        let shouldTerminate = cancelled
+        lock.unlock()
+
+        if shouldTerminate, process.isRunning {
+            process.terminate()
+        }
+    }
+
+    func clear(_ process: Process) {
+        lock.lock()
+        if self.process === process {
+            self.process = nil
+        }
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let runningProcess = process
+        lock.unlock()
+
+        if let runningProcess, runningProcess.isRunning {
+            runningProcess.terminate()
+        }
+    }
+}
+
 private struct CommandResult {
     let status: Int32
     let output: String
@@ -8,8 +50,10 @@ private struct CommandResult {
 nonisolated enum XcodePackager {
     static func package(
         _ request: PackageRequest,
+        cancellation: BuildCancellationController,
         onOutput: @escaping @Sendable (String) -> Void
     ) throws -> PackageResult {
+        guard !cancellation.isCancelled else { throw PackageError.cancelled }
         let fileManager = FileManager.default
         let projectDirectoryURL = URL(fileURLWithPath: request.containerPath, isDirectory: true)
         let outputURL = URL(fileURLWithPath: request.outputDirectory, isDirectory: true)
@@ -58,10 +102,12 @@ nonisolated enum XcodePackager {
                 "CURRENT_PROJECT_VERSION=\(request.buildNumber)",
                 "clean", "archive"
             ],
+            cancellation: cancellation,
             onOutput: { chunk in
                 try? writeLog(chunk, to: buildLogHandle)
             }
         )
+        guard !cancellation.isCancelled else { throw PackageError.cancelled }
         guard archiveResult.status == 0 else {
             onOutput("===== 归档失败 =====\n\(importantErrors(from: archiveResult.output))\n")
             throw PackageError.commandFailed(archiveResult.status, archiveResult.output)
@@ -76,10 +122,11 @@ nonisolated enum XcodePackager {
             "-archivePath", archiveURL.path,
             "-exportPath", exportURL.path,
             "-exportOptionsPlist", exportOptionsURL.path
-        ], onOutput: { chunk in
+        ], cancellation: cancellation, onOutput: { chunk in
             onOutput(chunk)
             try? writeLog(chunk, to: buildLogHandle)
         })
+        guard !cancellation.isCancelled else { throw PackageError.cancelled }
         let combinedLog = archiveResult.output + "\n\n===== 导出 IPA =====\n" + exportResult.output
         guard exportResult.status == 0 else {
             throw PackageError.commandFailed(exportResult.status, combinedLog)
@@ -94,16 +141,28 @@ nonisolated enum XcodePackager {
         try fileManager.copyItem(at: ipaURL, to: artifactURL)
         try copyExportMetadata(from: exportURL, to: artifactDirectoryURL)
 
-        return PackageResult(artifactPath: artifactURL.path, log: combinedLog)
+        let fileAttributes = try fileManager.attributesOfItem(atPath: artifactURL.path)
+        let fileSize = (fileAttributes[.size] as? NSNumber)?.int64Value ?? 0
+
+        return PackageResult(
+            artifactPath: artifactURL.path,
+            fileSize: fileSize,
+            versionNumber: request.versionNumber,
+            buildNumber: request.buildNumber,
+            configuration: request.configuration,
+            log: combinedLog
+        )
     }
 
     private static func runXcodebuild(
         _ arguments: [String],
+        cancellation: BuildCancellationController,
         onOutput: @escaping @Sendable (String) -> Void
     ) throws -> CommandResult {
         try runCommand(
             executable: "/usr/bin/xcrun",
             arguments: ["xcodebuild"] + arguments,
+            cancellation: cancellation,
             onOutput: onOutput
         )
     }
@@ -111,16 +170,20 @@ nonisolated enum XcodePackager {
     private static func runCommand(
         executable: String,
         arguments: [String],
+        cancellation: BuildCancellationController? = nil,
         onOutput: (@Sendable (String) -> Void)? = nil
     ) throws -> CommandResult {
         let process = Process()
         let outputPipe = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
         process.standardOutput = outputPipe
         process.standardError = outputPipe
 
         try process.run()
+        cancellation?.register(process)
+        defer { cancellation?.clear(process) }
 
         var outputData = Data()
         let handle = outputPipe.fileHandleForReading
