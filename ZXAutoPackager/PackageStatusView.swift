@@ -20,6 +20,7 @@ struct PackageStatusView: View {
                         Text("v\(summary.version)")
                         Text("Build \(summary.buildNumber)")
                         Text(summary.configuration)
+                        Label("耗时 \(viewModel.elapsedTimeText)", systemImage: "clock")
                     }
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)

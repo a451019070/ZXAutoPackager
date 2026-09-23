@@ -341,6 +341,7 @@ final class PackagerViewModel: ObservableObject {
                     self.pgyerDownloadURL = uploadResult?.downloadURL
                     if let uploadResult {
                         self.statusMessage = "上传成功：\(uploadResult.appName) \(uploadResult.version)"
+                        self.showPgyerQRCode()
                     } else {
                         self.statusMessage = "打包成功：\(URL(fileURLWithPath: packageResult.artifactPath).lastPathComponent)"
                     }
