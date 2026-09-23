@@ -255,12 +255,17 @@ final class PackagerViewModel: ObservableObject {
 
         guard let projectAccess = restoreAccess(
             bookmarkKey: Keys.projectBookmark,
-            fallbackPath: containerPath
-        ), let outputAccess = restoreAccess(
-            bookmarkKey: Keys.outputBookmark,
-            fallbackPath: outputDirectory
+            fallbackPath: containerPath,
+            directoryName: "项目目录"
         ) else {
-            statusMessage = "目录授权已失效，请重新选择项目文件夹和导出目录"
+            return
+        }
+        guard let outputAccess = restoreAccess(
+            bookmarkKey: Keys.outputBookmark,
+            fallbackPath: outputDirectory,
+            directoryName: "导出目录"
+        ) else {
+            projectAccess.stop()
             return
         }
 
@@ -462,43 +467,51 @@ final class PackagerViewModel: ObservableObject {
 
     private func restoreAccess(
         bookmarkKey: String,
-        fallbackPath: String
+        fallbackPath: String,
+        directoryName: String
     ) -> ScopedDirectoryAccess? {
-        if !fallbackPath.isEmpty,
-           isInsideDesktop(URL(fileURLWithPath: fallbackPath, isDirectory: true)) {
-            defaults.removeObject(forKey: bookmarkKey)
-            statusMessage = "为避免系统桌面访问提示，请将项目和导出目录移出桌面后重新选择"
+        let trimmedPath = fallbackPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            statusMessage = "请重新选择\(directoryName)"
             return nil
         }
+
+        let fallbackURL = URL(fileURLWithPath: trimmedPath, isDirectory: true).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        let fallbackExists = FileManager.default.fileExists(
+            atPath: fallbackURL.path,
+            isDirectory: &isDirectory
+        ) && isDirectory.boolValue
 
         if let data = defaults.data(forKey: bookmarkKey) {
             do {
                 var isStale = false
-                let url = try URL(
+                let bookmarkedURL = try URL(
                     resolvingBookmarkData: data,
                     options: [.withSecurityScope],
                     relativeTo: nil,
                     bookmarkDataIsStale: &isStale
-                )
-                if isStale {
-                    saveBookmark(for: url, key: bookmarkKey)
+                ).standardizedFileURL
+
+                if bookmarkedURL.path == fallbackURL.path {
+                    if isStale {
+                        saveBookmark(for: bookmarkedURL, key: bookmarkKey)
+                    }
+                    return ScopedDirectoryAccess(url: bookmarkedURL)
                 }
-                return ScopedDirectoryAccess(url: url)
+
+                defaults.removeObject(forKey: bookmarkKey)
             } catch {
                 defaults.removeObject(forKey: bookmarkKey)
             }
         }
 
-        guard !fallbackPath.isEmpty else { return nil }
-        let fallbackURL = URL(fileURLWithPath: fallbackPath, isDirectory: true)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(
-            atPath: fallbackURL.path,
-            isDirectory: &isDirectory
-        ), isDirectory.boolValue else {
-            statusMessage = "目录不存在，请重新选择：\(fallbackPath)"
+        guard fallbackExists else {
+            statusMessage = "\(directoryName)不存在或无法访问，请重新选择：\(trimmedPath)"
             return nil
         }
+
+        saveBookmark(for: fallbackURL, key: bookmarkKey)
         return ScopedDirectoryAccess(url: fallbackURL)
     }
 
