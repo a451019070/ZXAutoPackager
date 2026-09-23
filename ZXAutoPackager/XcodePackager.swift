@@ -32,7 +32,22 @@ nonisolated enum XcodePackager {
         try fileManager.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: temporaryRoot) }
 
-        onOutput("===== 开始归档 =====\n")
+        let safeScheme = safeFileName(request.scheme)
+        let safeVersion = safeFileName(request.versionNumber)
+        let exportFolderName = "\(safeScheme) \(exportTimestamp())"
+        let artifactDirectoryURL = outputURL.appendingPathComponent(exportFolderName, isDirectory: true)
+        if fileManager.fileExists(atPath: artifactDirectoryURL.path) {
+            try fileManager.removeItem(at: artifactDirectoryURL)
+        }
+        try fileManager.createDirectory(at: artifactDirectoryURL, withIntermediateDirectories: true)
+
+        let buildLogURL = artifactDirectoryURL.appendingPathComponent("Build.log")
+        fileManager.createFile(atPath: buildLogURL.path, contents: nil)
+        let buildLogHandle = try FileHandle(forWritingTo: buildLogURL)
+        defer { try? buildLogHandle.close() }
+
+        onOutput("===== 开始归档 =====\n正在归档 \(request.scheme)（\(request.configuration)）…\n")
+        try writeLog("===== 开始归档 =====\n", to: buildLogHandle)
         let archiveResult = try runXcodebuild(
             containerArguments + [
                 "-scheme", request.scheme,
@@ -43,21 +58,28 @@ nonisolated enum XcodePackager {
                 "CURRENT_PROJECT_VERSION=\(request.buildNumber)",
                 "clean", "archive"
             ],
-            onOutput: onOutput
+            onOutput: { chunk in
+                try? writeLog(chunk, to: buildLogHandle)
+            }
         )
         guard archiveResult.status == 0 else {
+            onOutput("===== 归档失败 =====\n\(importantErrors(from: archiveResult.output))\n")
             throw PackageError.commandFailed(archiveResult.status, archiveResult.output)
         }
 
         let signingInfo = try signingInfo(from: archiveURL)
         try makeExportOptionsPlist(at: exportOptionsURL, signingInfo: signingInfo)
-        onOutput("\n===== 开始导出 IPA =====\n")
+        onOutput("===== 开始导出 IPA =====\n")
+        try writeLog("\n===== 开始导出 IPA =====\n", to: buildLogHandle)
         let exportResult = try runXcodebuild([
             "-exportArchive",
             "-archivePath", archiveURL.path,
             "-exportPath", exportURL.path,
             "-exportOptionsPlist", exportOptionsURL.path
-        ], onOutput: onOutput)
+        ], onOutput: { chunk in
+            onOutput(chunk)
+            try? writeLog(chunk, to: buildLogHandle)
+        })
         let combinedLog = archiveResult.output + "\n\n===== 导出 IPA =====\n" + exportResult.output
         guard exportResult.status == 0 else {
             throw PackageError.commandFailed(exportResult.status, combinedLog)
@@ -66,15 +88,6 @@ nonisolated enum XcodePackager {
         guard let ipaURL = findIPA(in: exportURL) else {
             throw PackageError.productNotFound(combinedLog)
         }
-
-        let safeScheme = safeFileName(request.scheme)
-        let safeVersion = safeFileName(request.versionNumber)
-        let exportFolderName = "\(safeScheme) \(exportTimestamp())"
-        let artifactDirectoryURL = outputURL.appendingPathComponent(exportFolderName, isDirectory: true)
-        if fileManager.fileExists(atPath: artifactDirectoryURL.path) {
-            try fileManager.removeItem(at: artifactDirectoryURL)
-        }
-        try fileManager.createDirectory(at: artifactDirectoryURL, withIntermediateDirectories: true)
 
         let ipaName = "\(safeScheme)-v\(safeVersion)-\(request.configuration)-build\(request.buildNumber).ipa"
         let artifactURL = artifactDirectoryURL.appendingPathComponent(ipaName)
@@ -249,6 +262,24 @@ nonisolated enum XcodePackager {
         throw PackageError.invalidInput(
             "所选文件夹中没有找到 .xcworkspace 或 .xcodeproj，请选择 Xcode 项目的根目录。"
         )
+    }
+
+    private static func writeLog(_ value: String, to handle: FileHandle) throws {
+        try handle.write(contentsOf: Data(value.utf8))
+    }
+
+    private static func importantErrors(from output: String) -> String {
+        let importantLines = output
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { line in
+                let lowercased = line.lowercased()
+                return lowercased.contains("error:") ||
+                    lowercased.contains("archive failed") ||
+                    lowercased.contains("provisioning profile") ||
+                    lowercased.contains("code signing")
+            }
+        return importantLines.suffix(20).joined(separator: "\n")
     }
 
     private static func copyExportMetadata(from sourceURL: URL, to destinationURL: URL) throws {

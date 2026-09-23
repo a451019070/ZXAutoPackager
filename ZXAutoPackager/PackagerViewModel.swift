@@ -79,11 +79,22 @@ final class PackagerViewModel: ObservableObject {
     @Published var outputDirectory = "" {
         didSet { defaults.set(outputDirectory, forKey: Keys.outputDirectory) }
     }
+    @Published var uploadToPgyer = false {
+        didSet { defaults.set(uploadToPgyer, forKey: Keys.uploadToPgyer) }
+    }
+    @Published var pgyerAPIKey = "" {
+        didSet { defaults.set(pgyerAPIKey, forKey: Keys.pgyerAPIKey) }
+    }
+    @Published var updateDescription = "" {
+        didSet { defaults.set(updateDescription, forKey: Keys.updateDescription) }
+    }
     @Published var isPackaging = false
     @Published var elapsedSeconds = 0
     @Published var statusMessage = "请选择工程和导出目录"
     @Published var log = ""
     @Published var lastArtifactPath: String?
+    @Published var pgyerDownloadURL: String?
+    @Published var isShowingQRCode = false
 
     private enum Keys {
         static let containerPath = "ZXAutoPackager.containerPath"
@@ -92,6 +103,9 @@ final class PackagerViewModel: ObservableObject {
         static let versionNumber = "ZXAutoPackager.versionNumber"
         static let buildNumber = "ZXAutoPackager.buildNumber"
         static let outputDirectory = "ZXAutoPackager.outputDirectory"
+        static let uploadToPgyer = "ZXAutoPackager.uploadToPgyer"
+        static let pgyerAPIKey = "ZXAutoPackager.pgyerAPIKey"
+        static let updateDescription = "ZXAutoPackager.updateDescription"
         static let lastSuccessfulBuild = "ZXAutoPackager.lastSuccessfulBuild"
     }
 
@@ -113,6 +127,9 @@ final class PackagerViewModel: ObservableObject {
         ) ?? .release
         versionNumber = defaults.string(forKey: Keys.versionNumber) ?? "1.0"
         outputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
+        uploadToPgyer = defaults.bool(forKey: Keys.uploadToPgyer)
+        pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
+        updateDescription = defaults.string(forKey: Keys.updateDescription) ?? ""
 
         if let savedBuild = defaults.string(forKey: Keys.buildNumber), !savedBuild.isEmpty {
             buildNumber = savedBuild
@@ -132,7 +149,8 @@ final class PackagerViewModel: ObservableObject {
         !scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         isValidVersionNumber &&
         Int(buildNumber).map { $0 > 0 } == true &&
-        !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        (!uploadToPgyer || !pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     var elapsedTimeText: String {
@@ -202,10 +220,18 @@ final class PackagerViewModel: ObservableObject {
             outputDirectory: outputDirectory
         )
 
+        let shouldUploadToPgyer = uploadToPgyer
+        let pgyerRequest = PgyerUploadRequest(
+            apiKey: pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            ipaPath: "",
+            updateDescription: updateDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+
         isPackaging = true
         elapsedSeconds = 0
         startElapsedTimer()
         lastArtifactPath = nil
+        pgyerDownloadURL = nil
         log = ""
         statusMessage = "正在归档并导出 \(configuration.rawValue) IPA…"
 
@@ -214,15 +240,33 @@ final class PackagerViewModel: ObservableObject {
 
         Task.detached(priority: .userInitiated) {
             do {
-                let result = try XcodePackager.package(request) { chunk in
+                let packageResult = try XcodePackager.package(request) { chunk in
                     logBuffer.append(chunk)
                 }
+
+                var uploadResult: PgyerUploadResult?
+                if shouldUploadToPgyer {
+                    let uploadRequest = PgyerUploadRequest(
+                        apiKey: pgyerRequest.apiKey,
+                        ipaPath: packageResult.artifactPath,
+                        updateDescription: pgyerRequest.updateDescription
+                    )
+                    uploadResult = try await PgyerUploader.upload(uploadRequest) { chunk in
+                        logBuffer.append(chunk)
+                    }
+                }
+
                 await MainActor.run {
                     self.finishLogRefresh(from: logBuffer)
                     self.stopElapsedTimer()
                     self.isPackaging = false
-                    self.lastArtifactPath = result.artifactPath
-                    self.statusMessage = "打包成功：\(URL(fileURLWithPath: result.artifactPath).lastPathComponent)"
+                    self.lastArtifactPath = packageResult.artifactPath
+                    self.pgyerDownloadURL = uploadResult?.downloadURL
+                    if let uploadResult {
+                        self.statusMessage = "上传成功：\(uploadResult.appName) \(uploadResult.version)"
+                    } else {
+                        self.statusMessage = "打包成功：\(URL(fileURLWithPath: packageResult.artifactPath).lastPathComponent)"
+                    }
                     self.defaults.set(build, forKey: Keys.lastSuccessfulBuild)
                     self.buildNumber = String(build + 1)
                 }
@@ -292,6 +336,16 @@ final class PackagerViewModel: ObservableObject {
             return "归档完成，但没有找到导出的 IPA。"
         }
         return error.localizedDescription
+    }
+
+    func showPgyerQRCode() {
+        guard pgyerDownloadURL != nil else { return }
+        isShowingQRCode = true
+    }
+
+    func openPgyerDownloadPage() {
+        guard let pgyerDownloadURL, let url = URL(string: pgyerDownloadURL) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func revealArtifact() {

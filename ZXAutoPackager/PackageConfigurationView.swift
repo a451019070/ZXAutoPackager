@@ -66,6 +66,26 @@ struct PackageConfigurationView: View {
                         action: viewModel.chooseOutputDirectory
                     )
                 }
+
+                GridRow {
+                    fieldTitle("蒲公英")
+                    Toggle("打包成功后自动上传", isOn: $viewModel.uploadToPgyer)
+                        .toggleStyle(.switch)
+                }
+
+                if viewModel.uploadToPgyer {
+                    GridRow {
+                        fieldTitle("API Key")
+                        SecureField("蒲公英 API Key", text: $viewModel.pgyerAPIKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    GridRow {
+                        fieldTitle("更新说明")
+                        TextField("可选，本次版本更新内容", text: $viewModel.updateDescription)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
             }
             .padding(8)
         } label: {

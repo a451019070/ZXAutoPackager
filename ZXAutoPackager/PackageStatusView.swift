@@ -18,6 +18,11 @@ struct PackageStatusView: View {
             }
             Spacer()
 
+            if viewModel.pgyerDownloadURL != nil {
+                Button("查看二维码", action: viewModel.showPgyerQRCode)
+                Button("打开下载页面", action: viewModel.openPgyerDownloadPage)
+            }
+
             if viewModel.lastArtifactPath != nil {
                 Button("在 Finder 中显示", action: viewModel.revealArtifact)
             }

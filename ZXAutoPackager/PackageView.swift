@@ -18,6 +18,14 @@ struct PackageView: View {
         }
         .frame(minWidth: 720, minHeight: 650)
         .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(isPresented: $viewModel.isShowingQRCode) {
+            if let downloadURL = viewModel.pgyerDownloadURL {
+                PgyerQRCodeView(
+                    downloadURL: downloadURL,
+                    openPage: viewModel.openPgyerDownloadPage
+                )
+            }
+        }
     }
 }
 

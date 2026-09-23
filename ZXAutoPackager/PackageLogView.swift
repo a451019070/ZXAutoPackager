@@ -2,17 +2,58 @@ import AppKit
 import SwiftUI
 
 struct PackageLogView: View {
+    @AppStorage("ZXAutoPackager.progressViewHeight") private var storedHeight = 260.0
+    @GestureState private var dragOffset = 0.0
+
     let log: String
+
+    private var currentHeight: CGFloat {
+        min(max(storedHeight + dragOffset, 140), 700)
+    }
 
     var body: some View {
         GroupBox {
-            BuildLogTextView(text: log.isEmpty ? "打包日志将在这里显示。" : log)
-                .frame(height: 260)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+            VStack(spacing: 0) {
+                BuildLogTextView(text: log.isEmpty ? "构建进度将在这里显示。" : log)
+                    .frame(height: currentHeight)
+
+                resizeHandle
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         } label: {
-            Label("构建日志", systemImage: "terminal")
+            Label("构建进度", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
                 .font(.headline)
         }
+    }
+
+    private var resizeHandle: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color(nsColor: .controlBackgroundColor))
+
+            Capsule()
+                .fill(.secondary.opacity(0.55))
+                .frame(width: 42, height: 4)
+        }
+        .frame(height: 14)
+        .contentShape(Rectangle())
+        .onHover { isHovering in
+            if isHovering {
+                NSCursor.resizeUpDown.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .updating($dragOffset) { value, state, _ in
+                    state = value.translation.height
+                }
+                .onEnded { value in
+                    storedHeight = min(max(storedHeight + value.translation.height, 140), 700)
+                }
+        )
+        .help("上下拖动调整构建进度区域高度")
     }
 }
 
