@@ -1,0 +1,276 @@
+import Foundation
+
+private struct CommandResult {
+    let status: Int32
+    let output: String
+}
+
+nonisolated enum XcodePackager {
+    static func package(
+        _ request: PackageRequest,
+        onOutput: @escaping @Sendable (String) -> Void
+    ) throws -> PackageResult {
+        let fileManager = FileManager.default
+        let projectDirectoryURL = URL(fileURLWithPath: request.containerPath, isDirectory: true)
+        let outputURL = URL(fileURLWithPath: request.outputDirectory, isDirectory: true)
+
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: projectDirectoryURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw PackageError.invalidInput("所选项目文件夹不存在。")
+        }
+
+        let containerURL = try findXcodeContainer(in: projectDirectoryURL)
+        let containerArguments = try arguments(for: containerURL)
+        try fileManager.createDirectory(at: outputURL, withIntermediateDirectories: true)
+
+        let temporaryRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("ZXAutoPackager-\(UUID().uuidString)", isDirectory: true)
+        let archiveURL = temporaryRoot.appendingPathComponent("App.xcarchive", isDirectory: true)
+        let exportURL = temporaryRoot.appendingPathComponent("Export", isDirectory: true)
+        let exportOptionsURL = temporaryRoot.appendingPathComponent("ExportOptions.plist")
+        try fileManager.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: temporaryRoot) }
+
+        onOutput("===== 开始归档 =====\n")
+        let archiveResult = try runXcodebuild(
+            containerArguments + [
+                "-scheme", request.scheme,
+                "-configuration", request.configuration,
+                "-destination", "generic/platform=iOS",
+                "-archivePath", archiveURL.path,
+                "MARKETING_VERSION=\(request.versionNumber)",
+                "CURRENT_PROJECT_VERSION=\(request.buildNumber)",
+                "clean", "archive"
+            ],
+            onOutput: onOutput
+        )
+        guard archiveResult.status == 0 else {
+            throw PackageError.commandFailed(archiveResult.status, archiveResult.output)
+        }
+
+        let signingInfo = try signingInfo(from: archiveURL)
+        try makeExportOptionsPlist(at: exportOptionsURL, signingInfo: signingInfo)
+        onOutput("\n===== 开始导出 IPA =====\n")
+        let exportResult = try runXcodebuild([
+            "-exportArchive",
+            "-archivePath", archiveURL.path,
+            "-exportPath", exportURL.path,
+            "-exportOptionsPlist", exportOptionsURL.path
+        ], onOutput: onOutput)
+        let combinedLog = archiveResult.output + "\n\n===== 导出 IPA =====\n" + exportResult.output
+        guard exportResult.status == 0 else {
+            throw PackageError.commandFailed(exportResult.status, combinedLog)
+        }
+
+        guard let ipaURL = findIPA(in: exportURL) else {
+            throw PackageError.productNotFound(combinedLog)
+        }
+
+        let safeScheme = safeFileName(request.scheme)
+        let safeVersion = safeFileName(request.versionNumber)
+        let exportFolderName = "\(safeScheme) \(exportTimestamp())"
+        let artifactDirectoryURL = outputURL.appendingPathComponent(exportFolderName, isDirectory: true)
+        if fileManager.fileExists(atPath: artifactDirectoryURL.path) {
+            try fileManager.removeItem(at: artifactDirectoryURL)
+        }
+        try fileManager.createDirectory(at: artifactDirectoryURL, withIntermediateDirectories: true)
+
+        let ipaName = "\(safeScheme)-v\(safeVersion)-\(request.configuration)-build\(request.buildNumber).ipa"
+        let artifactURL = artifactDirectoryURL.appendingPathComponent(ipaName)
+        try fileManager.copyItem(at: ipaURL, to: artifactURL)
+        try copyExportMetadata(from: exportURL, to: artifactDirectoryURL)
+
+        return PackageResult(artifactPath: artifactURL.path, log: combinedLog)
+    }
+
+    private static func runXcodebuild(
+        _ arguments: [String],
+        onOutput: @escaping @Sendable (String) -> Void
+    ) throws -> CommandResult {
+        try runCommand(
+            executable: "/usr/bin/xcrun",
+            arguments: ["xcodebuild"] + arguments,
+            onOutput: onOutput
+        )
+    }
+
+    private static func runCommand(
+        executable: String,
+        arguments: [String],
+        onOutput: (@Sendable (String) -> Void)? = nil
+    ) throws -> CommandResult {
+        let process = Process()
+        let outputPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+
+        try process.run()
+
+        var outputData = Data()
+        let handle = outputPipe.fileHandleForReading
+        while true {
+            let data = handle.availableData
+            guard !data.isEmpty else { break }
+            outputData.append(data)
+            onOutput?(String(decoding: data, as: UTF8.self))
+        }
+        process.waitUntilExit()
+
+        return CommandResult(
+            status: process.terminationStatus,
+            output: String(decoding: outputData, as: UTF8.self)
+        )
+    }
+
+    private struct SigningInfo {
+        let bundleIdentifier: String
+        let teamIdentifier: String
+        let profileName: String
+    }
+
+    private static func signingInfo(from archiveURL: URL) throws -> SigningInfo {
+        let applicationsURL = archiveURL
+            .appendingPathComponent("Products", isDirectory: true)
+            .appendingPathComponent("Applications", isDirectory: true)
+        let applications = try FileManager.default.contentsOfDirectory(
+            at: applicationsURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        guard let appURL = applications.first(where: { $0.pathExtension == "app" }) else {
+            throw PackageError.invalidInput("归档中没有找到应用程序。")
+        }
+
+        let infoPlistURL = appURL.appendingPathComponent("Info.plist")
+        let infoData = try Data(contentsOf: infoPlistURL)
+        guard let info = try PropertyListSerialization.propertyList(
+            from: infoData,
+            options: [],
+            format: nil
+        ) as? [String: Any],
+              let bundleIdentifier = info["CFBundleIdentifier"] as? String else {
+            throw PackageError.invalidInput("无法读取归档应用的 Bundle ID。")
+        }
+
+        let profileURL = appURL.appendingPathComponent("embedded.mobileprovision")
+        let profileResult = try runCommand(
+            executable: "/usr/bin/security",
+            arguments: ["cms", "-D", "-i", profileURL.path]
+        )
+        guard profileResult.status == 0,
+              let profileData = profileResult.output.data(using: .utf8),
+              let profile = try PropertyListSerialization.propertyList(
+                from: profileData,
+                options: [],
+                format: nil
+              ) as? [String: Any],
+              let profileName = profile["Name"] as? String,
+              let teamIdentifiers = profile["TeamIdentifier"] as? [String],
+              let teamIdentifier = teamIdentifiers.first else {
+            throw PackageError.invalidInput("无法读取归档内的 Provisioning Profile 签名信息。")
+        }
+
+        return SigningInfo(
+            bundleIdentifier: bundleIdentifier,
+            teamIdentifier: teamIdentifier,
+            profileName: profileName
+        )
+    }
+
+    private static func makeExportOptionsPlist(
+        at url: URL,
+        signingInfo: SigningInfo
+    ) throws {
+        let options: [String: Any] = [
+            "destination": "export",
+            "method": "debugging",
+            "signingCertificate": "Apple Development",
+            "signingStyle": "manual",
+            "teamID": signingInfo.teamIdentifier,
+            "provisioningProfiles": [
+                signingInfo.bundleIdentifier: signingInfo.profileName
+            ],
+            "stripSwiftSymbols": true,
+            "thinning": "<none>"
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: options,
+            format: .xml,
+            options: 0
+        )
+        try data.write(to: url, options: .atomic)
+    }
+
+    private static func findIPA(in directoryURL: URL) -> URL? {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        for case let url as URL in enumerator where url.pathExtension.lowercased() == "ipa" {
+            return url
+        }
+        return nil
+    }
+
+    private static func arguments(for containerURL: URL) throws -> [String] {
+        switch containerURL.pathExtension.lowercased() {
+        case "xcworkspace": return ["-workspace", containerURL.path]
+        case "xcodeproj": return ["-project", containerURL.path]
+        default: throw PackageError.invalidInput("请选择包含 .xcodeproj 或 .xcworkspace 的项目目录。")
+        }
+    }
+
+    private static func findXcodeContainer(in directoryURL: URL) throws -> URL {
+        let items = try FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+
+        if let workspace = items
+            .filter({ $0.pathExtension.lowercased() == "xcworkspace" })
+            .sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            .first {
+            return workspace
+        }
+
+        if let project = items
+            .filter({ $0.pathExtension.lowercased() == "xcodeproj" })
+            .sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            .first {
+            return project
+        }
+
+        throw PackageError.invalidInput(
+            "所选文件夹中没有找到 .xcworkspace 或 .xcodeproj，请选择 Xcode 项目的根目录。"
+        )
+    }
+
+    private static func copyExportMetadata(from sourceURL: URL, to destinationURL: URL) throws {
+        let fileManager = FileManager.default
+        for fileName in ["ExportOptions.plist", "Packaging.log", "DistributionSummary.plist"] {
+            let sourceFileURL = sourceURL.appendingPathComponent(fileName)
+            guard fileManager.fileExists(atPath: sourceFileURL.path) else { continue }
+            try fileManager.copyItem(
+                at: sourceFileURL,
+                to: destinationURL.appendingPathComponent(fileName)
+            )
+        }
+    }
+
+    private static func exportTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH-mm-ss"
+        return formatter.string(from: Date())
+    }
+
+    private static func safeFileName(_ value: String) -> String {
+        value.replacingOccurrences(of: "/", with: "-")
+    }
+}
