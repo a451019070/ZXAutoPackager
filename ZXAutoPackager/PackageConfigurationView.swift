@@ -16,6 +16,46 @@ struct PackageConfigurationView: View {
                 }
 
                 GridRow {
+                    fieldTitle("多分支")
+                    Toggle("使用独立 Worktree 打包", isOn: $viewModel.useGitBranch)
+                        .toggleStyle(.switch)
+                        .onChange(of: viewModel.useGitBranch) { _, enabled in
+                            if enabled && viewModel.remoteBranches.isEmpty {
+                                viewModel.refreshBranches(fetchRemote: false)
+                            }
+                        }
+                }
+
+                if viewModel.useGitBranch {
+                    GridRow {
+                        fieldTitle("远程分支")
+                        HStack {
+                            Picker("远程分支", selection: $viewModel.selectedBranch) {
+                                if viewModel.remoteBranches.isEmpty {
+                                    Text("暂无分支").tag("")
+                                } else {
+                                    ForEach(viewModel.remoteBranches, id: \.self) { branch in
+                                        Text(branch).tag(branch)
+                                    }
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity)
+
+                            Button(viewModel.isLoadingBranches ? "刷新中…" : "刷新") {
+                                viewModel.refreshBranches()
+                            }
+                            .disabled(viewModel.isLoadingBranches || viewModel.isPackaging)
+                        }
+                    }
+
+                    GridRow {
+                        fieldTitle("依赖")
+                        Toggle("临时 Worktree 中执行 pod install", isOn: $viewModel.installPods)
+                    }
+                }
+
+                GridRow {
                     fieldTitle("Scheme")
                     TextField("例如：MyApp", text: $viewModel.scheme)
                         .textFieldStyle(.roundedBorder)

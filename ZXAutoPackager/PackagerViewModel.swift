@@ -119,6 +119,17 @@ final class PackagerViewModel: ObservableObject {
     @Published var updateDescription = "" {
         didSet { defaults.set(updateDescription, forKey: Keys.updateDescription) }
     }
+    @Published var useGitBranch = false {
+        didSet { defaults.set(useGitBranch, forKey: Keys.useGitBranch) }
+    }
+    @Published var selectedBranch = "" {
+        didSet { defaults.set(selectedBranch, forKey: Keys.selectedBranch) }
+    }
+    @Published var installPods = true {
+        didSet { defaults.set(installPods, forKey: Keys.installPods) }
+    }
+    @Published var remoteBranches: [String] = []
+    @Published var isLoadingBranches = false
     @Published var isPackaging = false
     @Published var elapsedSeconds = 0
     @Published var statusMessage = "请选择工程和导出目录"
@@ -140,6 +151,9 @@ final class PackagerViewModel: ObservableObject {
         static let uploadToPgyer = "ZXAutoPackager.uploadToPgyer"
         static let pgyerAPIKey = "ZXAutoPackager.pgyerAPIKey"
         static let updateDescription = "ZXAutoPackager.updateDescription"
+        static let useGitBranch = "ZXAutoPackager.useGitBranch"
+        static let selectedBranch = "ZXAutoPackager.selectedBranch"
+        static let installPods = "ZXAutoPackager.installPods"
         static let lastSuccessfulBuild = "ZXAutoPackager.lastSuccessfulBuild"
     }
 
@@ -168,6 +182,11 @@ final class PackagerViewModel: ObservableObject {
         uploadToPgyer = defaults.bool(forKey: Keys.uploadToPgyer)
         pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
         updateDescription = defaults.string(forKey: Keys.updateDescription) ?? ""
+        useGitBranch = defaults.bool(forKey: Keys.useGitBranch)
+        selectedBranch = defaults.string(forKey: Keys.selectedBranch) ?? ""
+        installPods = defaults.object(forKey: Keys.installPods) == nil
+            ? true
+            : defaults.bool(forKey: Keys.installPods)
 
         if let savedBuild = defaults.string(forKey: Keys.buildNumber), !savedBuild.isEmpty {
             buildNumber = savedBuild
@@ -188,7 +207,8 @@ final class PackagerViewModel: ObservableObject {
         isValidVersionNumber &&
         Int(buildNumber).map { $0 > 0 } == true &&
         !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        (!uploadToPgyer || !pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        (!uploadToPgyer || !pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) &&
+        (!useGitBranch || !selectedBranch.isEmpty)
     }
 
     var elapsedTimeText: String {
@@ -201,6 +221,35 @@ final class PackagerViewModel: ObservableObject {
         let value = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return false }
         return value.range(of: #"^\d+(\.\d+)*$"#, options: .regularExpression) != nil
+    }
+
+    func refreshBranches(fetchRemote: Bool = true) {
+        guard !containerPath.isEmpty, !isLoadingBranches, !isPackaging else { return }
+        isLoadingBranches = true
+        statusMessage = fetchRemote ? "正在刷新远程分支…" : "正在读取远程分支…"
+        let projectPath = containerPath
+
+        Task.detached(priority: .userInitiated) {
+            do {
+                let branches = try GitWorktreeManager.listRemoteBranches(
+                    projectPath: projectPath,
+                    fetchRemote: fetchRemote
+                )
+                await MainActor.run {
+                    self.remoteBranches = branches
+                    if !branches.contains(self.selectedBranch) {
+                        self.selectedBranch = branches.first ?? ""
+                    }
+                    self.isLoadingBranches = false
+                    self.statusMessage = "已读取 \(branches.count) 个远程分支"
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoadingBranches = false
+                    self.statusMessage = "分支读取失败：\(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     func chooseProject() {
@@ -221,6 +270,9 @@ final class PackagerViewModel: ObservableObject {
             scheme = url.lastPathComponent
         }
         statusMessage = "项目文件夹已选择，将自动识别 Xcode 工程"
+        if useGitBranch {
+            refreshBranches(fetchRemote: false)
+        }
     }
 
     func chooseOutputDirectory() {
@@ -279,6 +331,9 @@ final class PackagerViewModel: ObservableObject {
         )
 
         let shouldUploadToPgyer = uploadToPgyer
+        let shouldUseGitBranch = useGitBranch
+        let branchToBuild = selectedBranch
+        let shouldInstallPods = installPods
         let pgyerRequest = PgyerUploadRequest(
             apiKey: pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
             ipaPath: "",
@@ -300,13 +355,38 @@ final class PackagerViewModel: ObservableObject {
         let cancellation = BuildCancellationController()
         cancellationController = cancellation
         packageTask = Task.detached(priority: .userInitiated) {
+            var worktreeContext: GitWorktreeContext?
             defer {
+                if let worktreeContext {
+                    GitWorktreeManager.cleanup(worktreeContext)
+                }
                 projectAccess.stop()
                 outputAccess.stop()
             }
             do {
+                var effectiveRequest = request
+                if shouldUseGitBranch {
+                    let context = try GitWorktreeManager.prepare(
+                        projectPath: request.containerPath,
+                        branch: branchToBuild,
+                        installPods: shouldInstallPods,
+                        cancellation: cancellation
+                    ) { chunk in
+                        logBuffer.append(chunk)
+                    }
+                    worktreeContext = context
+                    effectiveRequest = PackageRequest(
+                        containerPath: context.projectDirectory.path,
+                        scheme: request.scheme,
+                        configuration: request.configuration,
+                        versionNumber: request.versionNumber,
+                        buildNumber: request.buildNumber,
+                        outputDirectory: request.outputDirectory
+                    )
+                }
+
                 let packageResult = try XcodePackager.package(
-                    request,
+                    effectiveRequest,
                     cancellation: cancellation
                 ) { chunk in
                     logBuffer.append(chunk)
@@ -316,10 +396,15 @@ final class PackagerViewModel: ObservableObject {
 
                 var uploadResult: PgyerUploadResult?
                 if shouldUploadToPgyer {
+                    let finalUpdateDescription = Self.makeUploadDescription(
+                        userDescription: pgyerRequest.updateDescription,
+                        packageResult: packageResult
+                    )
+                    logBuffer.append("\n===== 更新说明 =====\n\(finalUpdateDescription)\n")
                     let uploadRequest = PgyerUploadRequest(
                         apiKey: pgyerRequest.apiKey,
                         ipaPath: packageResult.artifactPath,
-                        updateDescription: pgyerRequest.updateDescription
+                        updateDescription: finalUpdateDescription
                     )
                     uploadResult = try await PgyerUploader.upload(uploadRequest) { chunk in
                         logBuffer.append(chunk)
@@ -424,6 +509,39 @@ final class PackagerViewModel: ObservableObject {
         log.append(value)
         guard log.count > maximumLogLength else { return }
         log = "===== 较早日志已省略 =====\n" + String(log.suffix(maximumLogLength))
+    }
+
+    nonisolated private static func makeUploadDescription(
+        userDescription: String,
+        packageResult: PackageResult,
+        uploadedAt: Date = Date()
+    ) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        let environmentUser = ProcessInfo.processInfo.environment["USER"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let systemUser = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        let user = environmentUser.isEmpty ? systemUser : environmentUser
+        let fullName = NSFullUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        let uploader = fullName.isEmpty ? user : fullName
+
+        var sections: [String] = []
+        let description = userDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !description.isEmpty {
+            sections.append(description)
+        }
+
+        sections.append("""
+        上传人：\(uploader)
+        上传时间：\(formatter.string(from: uploadedAt))
+        Version：\(packageResult.versionNumber)
+        Build：\(packageResult.buildNumber)
+        User：\(user)
+        构建环境：\(packageResult.configuration)
+        """)
+        return sections.joined(separator: "\n\n")
     }
 
     private func errorSummary(_ error: Error) -> String {
