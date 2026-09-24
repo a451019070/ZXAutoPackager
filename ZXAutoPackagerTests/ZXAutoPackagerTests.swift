@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import ZXAutoPackager
 
@@ -40,6 +41,28 @@ struct ZXAutoPackagerTests {
 
         #expect(version.marketingVersion == "1.2.3")
         #expect(version.currentProjectVersion == "42")
+    }
+
+    @Test func parsesProjectAndWorkspaceSchemes() throws {
+        let project = #"{ "project": { "name": "Demo", "schemes": ["App", "App-Debug"] } }"#
+        let workspace = #"{ "workspace": { "name": "Demo", "schemes": ["WorkspaceApp"] } }"#
+        #expect(try XcodePackager.parseSchemes(from: project) == ["App", "App-Debug"])
+        #expect(try XcodePackager.parseSchemes(from: workspace) == ["WorkspaceApp"])
+    }
+
+    @Test func platformDestinationsAndArtifacts() {
+        #expect(PackagePlatform.iOS.destination == "generic/platform=iOS")
+        #expect(PackagePlatform.macOS.destination == "generic/platform=macOS")
+        #expect(PackagePlatform.iOS.artifactType == "IPA")
+        #expect(PackagePlatform.macOS.artifactType == "ZIP")
+    }
+
+    @Test func findsAppInMacOSArchive() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("Products/Applications/Sample.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        #expect(XcodePackager.findArchivedApp(in: root)?.standardizedFileURL == app.standardizedFileURL)
     }
 
     @Test func maximumPgyerBuildNumberReturnsNilWithoutMatchingBuild() {

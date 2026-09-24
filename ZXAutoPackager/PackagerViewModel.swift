@@ -37,7 +37,17 @@ private final class ScopedDirectoryAccess: @unchecked Sendable {
     }
 }
 
+enum PackagePlatform: String, CaseIterable, Identifiable, Sendable {
+    case iOS = "iOS"
+    case macOS = "macOS"
+
+    var id: String { rawValue }
+    var destination: String { "generic/platform=\(rawValue)" }
+    var artifactType: String { self == .iOS ? "IPA" : "ZIP" }
+}
+
 struct PackageRequest: Sendable {
+    let platform: PackagePlatform
     let containerPath: String
     let scheme: String
     let configuration: String
@@ -98,6 +108,15 @@ final class PackagerViewModel: ObservableObject {
     @Published var scheme = "" {
         didSet { defaults.set(scheme, forKey: Keys.scheme) }
     }
+    @Published var platform: PackagePlatform = .iOS {
+        didSet {
+            defaults.set(platform.rawValue, forKey: Keys.platform)
+            if platform == .macOS {
+                uploadToPgyer = false
+                usePgyerBuildNumber = false
+            }
+        }
+    }
     @Published var configuration: Configuration = .release {
         didSet { defaults.set(configuration.rawValue, forKey: Keys.configuration) }
     }
@@ -133,6 +152,8 @@ final class PackagerViewModel: ObservableObject {
         didSet { defaults.set(installPods, forKey: Keys.installPods) }
     }
     @Published var remoteBranches: [String] = []
+    @Published var availableSchemes: [String] = []
+    @Published var isLoadingSchemes = false
     @Published var isLoadingBranches = false
     @Published var isLoadingPgyerBuildNumber = false
     @Published var isPackaging = false
@@ -147,6 +168,7 @@ final class PackagerViewModel: ObservableObject {
     private enum Keys {
         static let containerPath = "ZXAutoPackager.containerPath"
         static let scheme = "ZXAutoPackager.scheme"
+        static let platform = "ZXAutoPackager.platform"
         static let configuration = "ZXAutoPackager.configuration"
         static let versionNumber = "ZXAutoPackager.versionNumber"
         static let buildNumber = "ZXAutoPackager.buildNumber"
@@ -169,6 +191,7 @@ final class PackagerViewModel: ObservableObject {
     private var elapsedTimeTask: Task<Void, Never>?
     private var packageTask: Task<Void, Never>?
     private var cancellationController: BuildCancellationController?
+    private var schemeLookupID = UUID()
 
     deinit {
         logRefreshTask?.cancel()
@@ -180,12 +203,13 @@ final class PackagerViewModel: ObservableObject {
     init() {
         containerPath = defaults.string(forKey: Keys.containerPath) ?? ""
         scheme = defaults.string(forKey: Keys.scheme) ?? ""
+        platform = PackagePlatform(rawValue: defaults.string(forKey: Keys.platform) ?? "") ?? .iOS
         configuration = Configuration(
             rawValue: defaults.string(forKey: Keys.configuration) ?? ""
         ) ?? .release
         versionNumber = defaults.string(forKey: Keys.versionNumber) ?? ""
         outputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
-        uploadToPgyer = defaults.bool(forKey: Keys.uploadToPgyer)
+        uploadToPgyer = platform == .iOS && defaults.bool(forKey: Keys.uploadToPgyer)
         usePgyerBuildNumber = false
         defaults.set(false, forKey: Keys.usePgyerBuildNumber)
         pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
@@ -210,12 +234,15 @@ final class PackagerViewModel: ObservableObject {
         let versionCanResolve = trimmedVersion.isEmpty || isValidVersionNumber
         let buildCanResolve = usePgyerBuildNumber || trimmedBuild.isEmpty || Int(trimmedBuild).map { $0 > 0 } == true
 
-        return !isPackaging &&
+        return         !isPackaging &&
+        !isLoadingSchemes &&
         !isLoadingPgyerBuildNumber &&
         !containerPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        (availableSchemes.isEmpty || availableSchemes.contains(scheme)) &&
         versionCanResolve &&
         buildCanResolve &&
+        (platform == .iOS || (!uploadToPgyer && !usePgyerBuildNumber)) &&
         !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (!(uploadToPgyer || usePgyerBuildNumber) || hasPgyerAPIKey) &&
         (!usePgyerBuildNumber || hasPgyerAppKey) &&
@@ -224,8 +251,11 @@ final class PackagerViewModel: ObservableObject {
 
     var configurationHint: String {
         if containerPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请先选择项目文件夹" }
-        if scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请填写 Scheme" }
+        if isLoadingSchemes { return "正在读取项目 Scheme…" }
+        if scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请选择或填写 Scheme" }
+        if !availableSchemes.isEmpty && !availableSchemes.contains(scheme) { return "请选择当前工程可用的 Scheme" }
         if outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请选择导出目录" }
+        if platform == .macOS && (uploadToPgyer || usePgyerBuildNumber) { return "macOS 不支持蒲公英上传或 Build 号查询" }
         if !versionNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isValidVersionNumber {
             return "请在高级选项中检查版本号格式"
         }
@@ -241,6 +271,7 @@ final class PackagerViewModel: ObservableObject {
     }
 
     var canFetchPgyerBuildNumber: Bool {
+        platform == .iOS &&
         !isPackaging &&
         !isLoadingPgyerBuildNumber &&
         isValidVersionNumber &&
@@ -343,6 +374,45 @@ final class PackagerViewModel: ObservableObject {
         }
     }
 
+    func refreshSchemes() {
+        guard !containerPath.isEmpty, !isPackaging else { return }
+        guard let projectAccess = restoreAccess(
+            bookmarkKey: Keys.projectBookmark,
+            fallbackPath: containerPath,
+            directoryName: "项目目录"
+        ) else { return }
+
+        let lookupID = UUID()
+        schemeLookupID = lookupID
+        let projectPath = containerPath
+        isLoadingSchemes = true
+        statusMessage = "正在读取项目 Scheme…"
+        Task.detached(priority: .userInitiated) {
+            defer { projectAccess.stop() }
+            do {
+                let schemes = try XcodePackager.listSchemes(containerPath: projectAccess.url.path)
+                await MainActor.run {
+                    guard self.schemeLookupID == lookupID, self.containerPath == projectPath else { return }
+                    self.availableSchemes = schemes
+                    if !schemes.contains(self.scheme) {
+                        self.scheme = schemes.count == 1 ? schemes[0] : ""
+                    }
+                    self.isLoadingSchemes = false
+                    self.statusMessage = schemes.isEmpty
+                        ? "当前工程没有可用的共享 Scheme，请在 Xcode 中检查 Scheme 配置"
+                        : schemes.count == 1 ? "已选择 Scheme：\(schemes[0])" : "请选择要打包的 Scheme"
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.schemeLookupID == lookupID, self.containerPath == projectPath else { return }
+                    self.availableSchemes = []
+                    self.isLoadingSchemes = false
+                    self.statusMessage = "读取 Scheme 失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     func chooseProject() {
         let panel = NSOpenPanel()
         panel.title = "选择 Xcode 项目文件夹"
@@ -356,11 +426,17 @@ final class PackagerViewModel: ObservableObject {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         saveBookmark(for: url, key: Keys.projectBookmark)
+        let projectChanged = containerPath != url.path
         containerPath = url.path
-        if scheme.isEmpty {
-            scheme = url.lastPathComponent
+        if projectChanged {
+            scheme = ""
+            availableSchemes = []
+            versionNumber = ""
+            buildNumber = ""
+            remoteBranches = []
+            selectedBranch = ""
         }
-        statusMessage = "项目文件夹已选择，将自动识别 Xcode 工程"
+        refreshSchemes()
         if useGitBranch {
             refreshBranches(fetchRemote: false)
         }
@@ -384,7 +460,7 @@ final class PackagerViewModel: ObservableObject {
 
     func startPackaging() {
         guard canPackage else {
-            statusMessage = "请完整填写工程、Scheme、导出目录及所需的蒲公英配置"
+            statusMessage = configurationHint
             return
         }
 
@@ -405,6 +481,7 @@ final class PackagerViewModel: ObservableObject {
         }
 
         let scheme = scheme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let platform = platform
         let configuration = configuration.rawValue
         let enteredVersion = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let enteredBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -466,6 +543,7 @@ final class PackagerViewModel: ObservableObject {
                         containerPath: effectiveProjectPath,
                         scheme: scheme,
                         configuration: configuration,
+                        platform: platform,
                         cancellation: cancellation
                     )
                     if resolvedVersion.isEmpty {
@@ -510,10 +588,11 @@ final class PackagerViewModel: ObservableObject {
                     self.versionNumber = resolvedVersion
                     self.buildNumber = String(build)
                     self.isLoadingPgyerBuildNumber = false
-                    self.statusMessage = "正在归档并导出 \(configuration) IPA…"
+                    self.statusMessage = "正在归档并导出 \(configuration) \(platform.artifactType)…"
                 }
 
                 let request = PackageRequest(
+                    platform: platform,
                     containerPath: effectiveProjectPath,
                     scheme: scheme,
                     configuration: configuration,

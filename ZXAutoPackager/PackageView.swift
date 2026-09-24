@@ -27,6 +27,9 @@ struct PackageView: View {
         .frame(minWidth: 720, minHeight: 650)
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
+            if !viewModel.containerPath.isEmpty {
+                viewModel.refreshSchemes()
+            }
             if viewModel.useGitBranch && viewModel.remoteBranches.isEmpty {
                 viewModel.refreshBranches(fetchRemote: false)
             }

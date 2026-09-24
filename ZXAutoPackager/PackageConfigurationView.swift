@@ -18,8 +18,25 @@ struct PackageConfigurationView: View {
 
                 GridRow {
                     fieldTitle("Scheme")
-                    TextField("例如：MyApp", text: $viewModel.scheme)
-                        .textFieldStyle(.roundedBorder)
+                    HStack {
+                        if viewModel.availableSchemes.isEmpty {
+                            TextField("例如：MyApp", text: $viewModel.scheme)
+                                .textFieldStyle(.roundedBorder)
+                        } else {
+                            Picker("Scheme", selection: $viewModel.scheme) {
+                                Text("请选择 Scheme").tag("")
+                                ForEach(viewModel.availableSchemes, id: \.self) { scheme in
+                                    Text(scheme).tag(scheme)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity)
+                        }
+                        Button(viewModel.isLoadingSchemes ? "读取中…" : "刷新") {
+                            viewModel.refreshSchemes()
+                        }
+                        .disabled(viewModel.containerPath.isEmpty || viewModel.isLoadingSchemes || viewModel.isPackaging)
+                    }
                 }
 
                 GridRow {
@@ -29,6 +46,24 @@ struct PackageConfigurationView: View {
                         placeholder: "请选择产物保存目录",
                         action: viewModel.chooseOutputDirectory
                     )
+                }
+
+                GridRow {
+                    fieldTitle("目标平台")
+                    HStack(spacing: 12) {
+                        Picker("目标平台", selection: $viewModel.platform) {
+                            ForEach(PackagePlatform.allCases) { platform in
+                                Text(platform.rawValue).tag(platform)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 180)
+                        Text(viewModel.platform == .iOS ? "导出 IPA" : "导出 macOS 应用 ZIP")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
                 }
 
                 GridRow {
@@ -60,13 +95,15 @@ struct PackageConfigurationView: View {
                     .gridCellColumns(2)
                 }
 
-                GridRow {
-                    fieldTitle("蒲公英")
-                    Toggle("打包后上传蒲公英", isOn: $viewModel.uploadToPgyer)
-                        .toggleStyle(.switch)
+                if viewModel.platform == .iOS {
+                    GridRow {
+                        fieldTitle("蒲公英")
+                        Toggle("打包后上传蒲公英", isOn: $viewModel.uploadToPgyer)
+                            .toggleStyle(.switch)
+                    }
                 }
 
-                if viewModel.uploadToPgyer || viewModel.usePgyerBuildNumber {
+                if viewModel.platform == .iOS && (viewModel.uploadToPgyer || viewModel.usePgyerBuildNumber) {
                     GridRow {
                         fieldTitle("API Key")
                         SecureField("蒲公英 API Key", text: $viewModel.pgyerAPIKey)
@@ -74,7 +111,7 @@ struct PackageConfigurationView: View {
                     }
                 }
 
-                if viewModel.usePgyerBuildNumber {
+                if viewModel.platform == .iOS && viewModel.usePgyerBuildNumber {
                     GridRow {
                         fieldTitle("App Key")
                         SecureField("蒲公英应用 App Key", text: $viewModel.pgyerAppKey)
@@ -82,7 +119,7 @@ struct PackageConfigurationView: View {
                     }
                 }
 
-                if viewModel.uploadToPgyer {
+                if viewModel.platform == .iOS && viewModel.uploadToPgyer {
                     GridRow {
                         fieldTitle("更新说明")
                         TextField("可选，本次版本更新内容", text: $viewModel.updateDescription)
@@ -159,10 +196,12 @@ struct PackageConfigurationView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 180)
                         .disabled(viewModel.usePgyerBuildNumber)
-                    Button(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询蒲公英") {
-                        viewModel.fetchNextBuildNumberFromPgyer()
+                    if viewModel.platform == .iOS {
+                        Button(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询蒲公英") {
+                            viewModel.fetchNextBuildNumberFromPgyer()
+                        }
+                        .disabled(!viewModel.canFetchPgyerBuildNumber)
                     }
-                    .disabled(!viewModel.canFetchPgyerBuildNumber)
                     Text(viewModel.usePgyerBuildNumber
                          ? "打包前自动使用当前 Version 的远端最大值 +1"
                          : "留空时读取 Xcode 的 CURRENT_PROJECT_VERSION")
@@ -172,10 +211,12 @@ struct PackageConfigurationView: View {
                 }
             }
 
-            GridRow {
-                fieldTitle("Build 来源")
-                Toggle("从蒲公英自动获取", isOn: $viewModel.usePgyerBuildNumber)
-                    .toggleStyle(.switch)
+            if viewModel.platform == .iOS {
+                GridRow {
+                    fieldTitle("Build 来源")
+                    Toggle("从蒲公英自动获取", isOn: $viewModel.usePgyerBuildNumber)
+                        .toggleStyle(.switch)
+                }
             }
         }
     }

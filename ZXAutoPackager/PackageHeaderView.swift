@@ -12,7 +12,7 @@ struct PackageHeaderView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("ZX Auto Packager")
                     .font(.title2.bold())
-                Text("选择 iOS 工程，一键归档并导出 IPA")
+                Text("选择 Xcode 工程，归档并导出 iOS 或 macOS 应用")
                     .foregroundStyle(.secondary)
             }
             Spacer()

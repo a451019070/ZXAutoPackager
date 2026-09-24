@@ -58,10 +58,39 @@ nonisolated enum XcodePackager {
         let buildSettings: [String: String]
     }
 
+    static func listSchemes(containerPath: String) throws -> [String] {
+        let directoryURL = URL(fileURLWithPath: containerPath, isDirectory: true)
+        let containerURL = try findXcodeContainer(in: directoryURL)
+        let result = try runXcodebuild(
+            try arguments(for: containerURL) + ["-list", "-json"],
+            cancellation: BuildCancellationController(),
+            onOutput: { _ in }
+        )
+        guard result.status == 0 else {
+            throw PackageError.commandFailed(result.status, result.output)
+        }
+        return try parseSchemes(from: result.output)
+    }
+
+    static func parseSchemes(from output: String) throws -> [String] {
+        guard let start = output.firstIndex(of: "{"),
+              let end = output.lastIndex(of: "}"), start <= end else {
+            throw PackageError.invalidInput("无法解析 Xcode Scheme 列表。")
+        }
+        let data = Data(output[start...end].utf8)
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let container = (root["workspace"] ?? root["project"]) as? [String: Any],
+              let schemes = container["schemes"] as? [String] else {
+            throw PackageError.invalidInput("无法解析 Xcode Scheme 列表。")
+        }
+        return schemes
+    }
+
     static func readBuildVersion(
         containerPath: String,
         scheme: String,
         configuration: String,
+        platform: PackagePlatform,
         cancellation: BuildCancellationController
     ) throws -> XcodeBuildVersion {
         guard !cancellation.isCancelled else { throw PackageError.cancelled }
@@ -80,7 +109,7 @@ nonisolated enum XcodePackager {
             try arguments(for: containerURL) + [
                 "-scheme", scheme,
                 "-configuration", configuration,
-                "-destination", "generic/platform=iOS",
+                "-destination", platform.destination,
                 "-showBuildSettings",
                 "-json"
             ],
@@ -189,7 +218,7 @@ nonisolated enum XcodePackager {
             containerArguments + [
                 "-scheme", request.scheme,
                 "-configuration", request.configuration,
-                "-destination", "generic/platform=iOS",
+                "-destination", request.platform.destination,
                 "-archivePath", archiveURL.path,
                 "MARKETING_VERSION=\(request.versionNumber)",
                 "CURRENT_PROJECT_VERSION=\(request.buildNumber)",
@@ -206,33 +235,56 @@ nonisolated enum XcodePackager {
             throw PackageError.commandFailed(archiveResult.status, archiveResult.output)
         }
 
-        let signingInfo = try signingInfo(from: archiveURL)
-        try makeExportOptionsPlist(at: exportOptionsURL, signingInfo: signingInfo)
-        onOutput("===== 开始导出 IPA =====\n")
-        try writeLog("\n===== 开始导出 IPA =====\n", to: buildLogHandle)
-        let exportResult = try runXcodebuild([
-            "-exportArchive",
-            "-archivePath", archiveURL.path,
-            "-exportPath", exportURL.path,
-            "-exportOptionsPlist", exportOptionsURL.path
-        ], cancellation: cancellation, onOutput: { chunk in
-            onOutput(chunk)
-            try? writeLog(chunk, to: buildLogHandle)
-        })
-        guard !cancellation.isCancelled else { throw PackageError.cancelled }
-        let combinedLog = archiveResult.output + "\n\n===== 导出 IPA =====\n" + exportResult.output
-        guard exportResult.status == 0 else {
-            throw PackageError.commandFailed(exportResult.status, combinedLog)
+        let baseName = "\(safeScheme)-v\(safeVersion)-\(request.configuration)-build\(request.buildNumber)"
+        let artifactURL: URL
+        let combinedLog: String
+        if request.platform == .iOS {
+            let signingInfo = try signingInfo(from: archiveURL)
+            try makeExportOptionsPlist(at: exportOptionsURL, signingInfo: signingInfo)
+            onOutput("===== 开始导出 IPA =====\n")
+            try writeLog("\n===== 开始导出 IPA =====\n", to: buildLogHandle)
+            let exportResult = try runXcodebuild([
+                "-exportArchive",
+                "-archivePath", archiveURL.path,
+                "-exportPath", exportURL.path,
+                "-exportOptionsPlist", exportOptionsURL.path
+            ], cancellation: cancellation, onOutput: { chunk in
+                onOutput(chunk)
+                try? writeLog(chunk, to: buildLogHandle)
+            })
+            guard !cancellation.isCancelled else { throw PackageError.cancelled }
+            combinedLog = archiveResult.output + "\n\n===== 导出 IPA =====\n" + exportResult.output
+            guard exportResult.status == 0 else {
+                throw PackageError.commandFailed(exportResult.status, combinedLog)
+            }
+            guard let ipaURL = findIPA(in: exportURL) else {
+                throw PackageError.productNotFound(combinedLog)
+            }
+            artifactURL = artifactDirectoryURL.appendingPathComponent(baseName + ".ipa")
+            try fileManager.copyItem(at: ipaURL, to: artifactURL)
+            try copyExportMetadata(from: exportURL, to: artifactDirectoryURL)
+        } else {
+            guard let appURL = findArchivedApp(in: archiveURL) else {
+                throw PackageError.invalidInput("归档中没有找到 macOS 应用，请确认 Scheme 的目标为 macOS App。")
+            }
+            artifactURL = artifactDirectoryURL.appendingPathComponent(baseName + ".zip")
+            onOutput("===== 压缩 macOS 应用 =====\n")
+            try writeLog("\n===== 压缩 macOS 应用 =====\n", to: buildLogHandle)
+            let zipResult = try runCommand(
+                executable: "/usr/bin/ditto",
+                arguments: ["-c", "-k", "--sequesterRsrc", "--keepParent", appURL.path, artifactURL.path],
+                cancellation: cancellation,
+                onOutput: { chunk in
+                    onOutput(chunk)
+                    try? writeLog(chunk, to: buildLogHandle)
+                }
+            )
+            guard !cancellation.isCancelled else { throw PackageError.cancelled }
+            combinedLog = archiveResult.output + "\n\n===== 压缩 macOS 应用 =====\n" + zipResult.output
+            guard zipResult.status == 0 else {
+                throw PackageError.commandFailed(zipResult.status, combinedLog)
+            }
         }
-
-        guard let ipaURL = findIPA(in: exportURL) else {
-            throw PackageError.productNotFound(combinedLog)
-        }
-
-        let ipaName = "\(safeScheme)-v\(safeVersion)-\(request.configuration)-build\(request.buildNumber).ipa"
-        let artifactURL = artifactDirectoryURL.appendingPathComponent(ipaName)
-        try fileManager.copyItem(at: ipaURL, to: artifactURL)
-        try copyExportMetadata(from: exportURL, to: artifactDirectoryURL)
 
         let fileAttributes = try fileManager.attributesOfItem(atPath: artifactURL.path)
         let fileSize = (fileAttributes[.size] as? NSNumber)?.int64Value ?? 0
@@ -292,6 +344,21 @@ nonisolated enum XcodePackager {
             status: process.terminationStatus,
             output: String(decoding: outputData, as: UTF8.self)
         )
+    }
+
+    static func findArchivedApp(in archiveURL: URL) -> URL? {
+        let applicationsURL = archiveURL
+            .appendingPathComponent("Products", isDirectory: true)
+            .appendingPathComponent("Applications", isDirectory: true)
+        guard let applications = try? FileManager.default.contentsOfDirectory(
+            at: applicationsURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        return applications
+            .filter { $0.pathExtension.lowercased() == "app" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .first
     }
 
     private struct SigningInfo {
