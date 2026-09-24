@@ -20,25 +20,17 @@ struct PackageConfigurationView: View {
 
                 GridRow {
                     fieldTitle("Scheme")
-                    HStack {
-                        if viewModel.availableSchemes.isEmpty {
-                            TextField("例如：MyApp", text: $viewModel.scheme)
-                                .textFieldStyle(.roundedBorder)
-                        } else {
-                            Picker("Scheme", selection: $viewModel.scheme) {
-                                Text("请选择 Scheme").tag("")
-                                ForEach(viewModel.availableSchemes, id: \.self) { scheme in
-                                    Text(scheme).tag(scheme)
-                                }
-                            }
-                            .labelsHidden()
-                            .frame(maxWidth: .infinity)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) {
+                            schemeControls
+                            versionBuildControls
                         }
-                        Button(viewModel.isLoadingSchemes ? "读取中…" : "刷新") {
-                            viewModel.refreshSchemes()
+                        VStack(alignment: .leading, spacing: 10) {
+                            schemeControls
+                            versionBuildControls
                         }
-                        .disabled(viewModel.containerPath.isEmpty || viewModel.isLoadingSchemes || viewModel.isPackaging)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 GridRow {
@@ -141,6 +133,58 @@ struct PackageConfigurationView: View {
         }
         .sheet(isPresented: $showFeishuSettings) {
             feishuSettings
+        }
+    }
+
+    private var schemeControls: some View {
+        HStack(spacing: 6) {
+            if viewModel.availableSchemes.isEmpty {
+                TextField("例如：MyApp", text: $viewModel.scheme)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 130)
+            } else {
+                Picker("Scheme", selection: $viewModel.scheme) {
+                    Text("请选择 Scheme").tag("")
+                    ForEach(viewModel.availableSchemes, id: \.self) { scheme in
+                        Text(scheme).tag(scheme)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 130)
+            }
+            Button(viewModel.isLoadingSchemes ? "读取中…" : "刷新") {
+                viewModel.refreshSchemes()
+            }
+            .disabled(viewModel.containerPath.isEmpty || viewModel.isLoadingSchemes || viewModel.isPackaging)
+        }
+    }
+
+    private var versionBuildControls: some View {
+        HStack(spacing: 8) {
+            Text("版本号")
+                .fixedSize()
+            TextField("Xcode 默认", text: $viewModel.versionNumber)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 86)
+                .help("留空时读取 Xcode 的 MARKETING_VERSION")
+            Text("Build 号")
+                .fixedSize()
+            TextField("Xcode 默认", text: $viewModel.buildNumber)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 82)
+                .disabled(viewModel.usePgyerBuildNumber)
+                .help(viewModel.usePgyerBuildNumber ? "打包前自动使用当前 Version 的远端最大值 +1" : "留空时读取 Xcode 的 CURRENT_PROJECT_VERSION")
+            if viewModel.platform == .iOS {
+                Button(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询") {
+                    viewModel.fetchNextBuildNumberFromPgyer()
+                }
+                .disabled(!viewModel.canFetchPgyerBuildNumber)
+                .help("查询蒲公英 Build 号")
+                Toggle("自动获取", isOn: $viewModel.usePgyerBuildNumber)
+                    .toggleStyle(.switch)
+                    .fixedSize()
+                    .help("打包前从蒲公英自动获取 Build 号")
+            }
         }
     }
 
@@ -282,48 +326,6 @@ struct PackageConfigurationView: View {
                 }
             }
 
-            GridRow {
-                fieldTitle("版本号")
-                HStack {
-                    TextField("例如：1.0.0", text: $viewModel.versionNumber)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 180)
-                    Text("留空时读取 Xcode 的 MARKETING_VERSION")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-            }
-
-            GridRow {
-                fieldTitle("Build 号")
-                HStack {
-                    TextField("Build", text: $viewModel.buildNumber)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 180)
-                        .disabled(viewModel.usePgyerBuildNumber)
-                    if viewModel.platform == .iOS {
-                        Button(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询蒲公英") {
-                            viewModel.fetchNextBuildNumberFromPgyer()
-                        }
-                        .disabled(!viewModel.canFetchPgyerBuildNumber)
-                    }
-                    Text(viewModel.usePgyerBuildNumber
-                         ? "打包前自动使用当前 Version 的远端最大值 +1"
-                         : "留空时读取 Xcode 的 CURRENT_PROJECT_VERSION")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-            }
-
-            if viewModel.platform == .iOS {
-                GridRow {
-                    fieldTitle("Build 来源")
-                    Toggle("从蒲公英自动获取", isOn: $viewModel.usePgyerBuildNumber)
-                        .toggleStyle(.switch)
-                }
-            }
         }
     }
 

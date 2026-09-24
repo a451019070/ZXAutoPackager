@@ -274,11 +274,11 @@ final class PackagerViewModel: ObservableObject {
         if outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请选择导出目录" }
         if platform == .macOS && (uploadToPgyer || usePgyerBuildNumber) { return "macOS 不支持蒲公英上传或 Build 号查询" }
         if !versionNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isValidVersionNumber {
-            return "请在高级选项中检查版本号格式"
+            return "请检查版本号格式"
         }
         let trimmedBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         if !usePgyerBuildNumber && !trimmedBuild.isEmpty && Int(trimmedBuild).map({ $0 > 0 }) != true {
-            return "请在高级选项中填写有效的 Build 号"
+            return "请填写有效的 Build 号"
         }
         if useGitBranch && selectedBranch.isEmpty { return "请在高级选项中选择远程分支" }
         if (uploadToPgyer || usePgyerBuildNumber) && !hasPgyerAPIKey { return "请填写蒲公英 API Key" }
