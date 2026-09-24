@@ -86,17 +86,6 @@ struct PackageConfigurationView: View {
                     }
                 }
 
-                GridRow {
-                    DisclosureGroup(isExpanded: $showAdvancedOptions) {
-                        advancedOptions
-                            .padding(.top, 12)
-                    } label: {
-                        Label("高级选项", systemImage: "slider.horizontal.3")
-                            .fontWeight(.medium)
-                    }
-                    .gridCellColumns(2)
-                }
-
                 if viewModel.platform == .iOS {
                     GridRow {
                         fieldTitle("蒲公英")
@@ -135,8 +124,17 @@ struct PackageConfigurationView: View {
             }
             .padding(8)
         } label: {
-            Label("打包配置", systemImage: "slider.horizontal.3")
-                .font(.headline)
+            HStack {
+                Label("打包配置", systemImage: "slider.horizontal.3")
+                    .font(.headline)
+                Spacer()
+                Button("高级选项…") { showAdvancedOptions = true }
+            }
+        }
+        .frame(maxWidth: 820)
+        .frame(maxWidth: .infinity)
+        .sheet(isPresented: $showAdvancedOptions) {
+            advancedSettings
         }
         .sheet(isPresented: $showPgyerSettings) {
             pgyerSettings
@@ -225,6 +223,21 @@ struct PackageConfigurationView: View {
         }
         .padding(24)
         .frame(width: 480)
+    }
+
+    private var advancedSettings: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("高级选项")
+                .font(.title3.bold())
+            advancedOptions
+            HStack {
+                Spacer()
+                Button("完成") { showAdvancedOptions = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 680)
     }
 
     private var advancedOptions: some View {
