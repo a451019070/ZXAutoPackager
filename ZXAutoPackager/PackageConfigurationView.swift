@@ -3,6 +3,8 @@ import SwiftUI
 struct PackageConfigurationView: View {
     @ObservedObject var viewModel: PackagerViewModel
     @State private var showAdvancedOptions = false
+    @State private var showPgyerSettings = false
+    @State private var showFeishuSettings = false
 
     var body: some View {
         GroupBox {
@@ -98,24 +100,15 @@ struct PackageConfigurationView: View {
                 if viewModel.platform == .iOS {
                     GridRow {
                         fieldTitle("蒲公英")
-                        Toggle("打包后上传蒲公英", isOn: $viewModel.uploadToPgyer)
-                            .toggleStyle(.switch)
-                    }
-                }
-
-                if viewModel.platform == .iOS && (viewModel.uploadToPgyer || viewModel.usePgyerBuildNumber) {
-                    GridRow {
-                        fieldTitle("API Key")
-                        SecureField("蒲公英 API Key", text: $viewModel.pgyerAPIKey)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                }
-
-                if viewModel.platform == .iOS && viewModel.usePgyerBuildNumber {
-                    GridRow {
-                        fieldTitle("App Key")
-                        SecureField("蒲公英应用 App Key", text: $viewModel.pgyerAppKey)
-                            .textFieldStyle(.roundedBorder)
+                        HStack(spacing: 12) {
+                            Toggle("打包后上传蒲公英", isOn: $viewModel.uploadToPgyer)
+                                .toggleStyle(.switch)
+                            Spacer()
+                            Text(pgyerStatus)
+                                .font(.caption)
+                                .foregroundStyle(pgyerNeedsSetup ? .orange : .secondary)
+                            Button("设置…") { showPgyerSettings = true }
+                        }
                     }
                 }
 
@@ -129,30 +122,14 @@ struct PackageConfigurationView: View {
 
                 GridRow {
                     fieldTitle("飞书")
-                    Toggle("打包后发送飞书通知", isOn: $viewModel.sendToFeishu)
-                        .toggleStyle(.switch)
-                }
-                if viewModel.sendToFeishu {
-                    GridRow {
-                        fieldTitle("Webhook")
-                        SecureField("飞书群自定义机器人 Webhook 地址", text: $viewModel.feishuWebhook)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    GridRow {
-                        fieldTitle("图片 imageKey")
-                        HStack {
-                            TextField("可选，填写已上传至飞书的图片 imageKey", text: $viewModel.feishuImageKey)
-                                .textFieldStyle(.roundedBorder)
-                            if viewModel.feishuImageKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                Link("点击获取 imageKey", destination: URL(string: "https://open.larkoffice.com/cardkit")!)
-                            }
-                        }
-                    }
-                    GridRow {
-                        Text("")
-                        Text("卡片使用已有 imageKey 显示图片；不会自动上传本次下载地址的二维码。下载地址来自蒲公英。")
+                    HStack(spacing: 12) {
+                        Toggle("打包后发送飞书通知", isOn: $viewModel.sendToFeishu)
+                            .toggleStyle(.switch)
+                        Spacer()
+                        Text(feishuStatus)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(feishuNeedsSetup ? .orange : .secondary)
+                        Button("设置…") { showFeishuSettings = true }
                     }
                 }
             }
@@ -161,6 +138,93 @@ struct PackageConfigurationView: View {
             Label("打包配置", systemImage: "slider.horizontal.3")
                 .font(.headline)
         }
+        .sheet(isPresented: $showPgyerSettings) {
+            pgyerSettings
+        }
+        .sheet(isPresented: $showFeishuSettings) {
+            feishuSettings
+        }
+    }
+
+    private var pgyerNeedsSetup: Bool {
+        let apiKeyMissing = viewModel.pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let appKeyMissing = viewModel.usePgyerBuildNumber && viewModel.pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return (viewModel.uploadToPgyer || viewModel.usePgyerBuildNumber) && (apiKeyMissing || appKeyMissing)
+    }
+
+    private var pgyerStatus: String {
+        if pgyerNeedsSetup { return "待配置" }
+        if viewModel.uploadToPgyer || viewModel.usePgyerBuildNumber { return "已启用 · 已配置" }
+        return viewModel.pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未配置" : "已配置"
+    }
+
+    private var feishuNeedsSetup: Bool {
+        viewModel.sendToFeishu && FeishuNotifier.validWebhook(viewModel.feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) == nil
+    }
+
+    private var feishuStatus: String {
+        if feishuNeedsSetup { return "待配置" }
+        if viewModel.sendToFeishu { return "已启用 · 已配置" }
+        return FeishuNotifier.validWebhook(viewModel.feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) == nil ? "未配置" : "已配置"
+    }
+
+    private var pgyerSettings: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("蒲公英设置")
+                .font(.title3.bold())
+            Text("填写一次后会保留，下次打包无需重复输入。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            LabeledContent("API Key") {
+                SecureField("蒲公英 API Key", text: $viewModel.pgyerAPIKey)
+                    .textFieldStyle(.roundedBorder)
+            }
+            LabeledContent("App Key") {
+                SecureField("蒲公英应用 App Key", text: $viewModel.pgyerAppKey)
+                    .textFieldStyle(.roundedBorder)
+            }
+            Text("仅从蒲公英查询 Build 号时需要 App Key。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("完成") { showPgyerSettings = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+    }
+
+    private var feishuSettings: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("飞书设置")
+                .font(.title3.bold())
+            Text("填写一次后会保留，下次打包无需重复输入。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            LabeledContent("Webhook") {
+                SecureField("飞书群自定义机器人 Webhook 地址", text: $viewModel.feishuWebhook)
+                    .textFieldStyle(.roundedBorder)
+            }
+            LabeledContent("图片 imageKey") {
+                TextField("可选，填写已上传至飞书的图片 imageKey", text: $viewModel.feishuImageKey)
+                    .textFieldStyle(.roundedBorder)
+            }
+            if viewModel.feishuImageKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Link("点击获取 imageKey", destination: URL(string: "https://open.larkoffice.com/cardkit")!)
+            }
+            Text("卡片使用已有 imageKey 显示图片；不会自动上传本次下载地址的二维码。下载地址来自蒲公英。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("完成") { showFeishuSettings = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
     }
 
     private var advancedOptions: some View {
