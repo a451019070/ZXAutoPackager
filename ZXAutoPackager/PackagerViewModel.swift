@@ -222,6 +222,24 @@ final class PackagerViewModel: ObservableObject {
         (!useGitBranch || !selectedBranch.isEmpty)
     }
 
+    var configurationHint: String {
+        if containerPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请先选择项目文件夹" }
+        if scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请填写 Scheme" }
+        if outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请选择导出目录" }
+        if !versionNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isValidVersionNumber {
+            return "请在高级选项中检查版本号格式"
+        }
+        let trimmedBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !usePgyerBuildNumber && !trimmedBuild.isEmpty && Int(trimmedBuild).map({ $0 > 0 }) != true {
+            return "请在高级选项中填写有效的 Build 号"
+        }
+        if useGitBranch && selectedBranch.isEmpty { return "请在高级选项中选择远程分支" }
+        if (uploadToPgyer || usePgyerBuildNumber) && !hasPgyerAPIKey { return "请填写蒲公英 API Key" }
+        if usePgyerBuildNumber && !hasPgyerAppKey { return "请填写蒲公英 App Key" }
+        if isLoadingPgyerBuildNumber { return "正在查询蒲公英 Build 号…" }
+        return "配置已就绪，可以开始打包"
+    }
+
     var canFetchPgyerBuildNumber: Bool {
         !isPackaging &&
         !isLoadingPgyerBuildNumber &&

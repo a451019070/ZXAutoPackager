@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PackageConfigurationView: View {
     @ObservedObject var viewModel: PackagerViewModel
+    @State private var showAdvancedOptions = false
 
     var body: some View {
         GroupBox {
@@ -16,99 +17,9 @@ struct PackageConfigurationView: View {
                 }
 
                 GridRow {
-                    fieldTitle("多分支")
-                    Toggle("使用独立 Worktree 打包", isOn: $viewModel.useGitBranch)
-                        .toggleStyle(.switch)
-                        .onChange(of: viewModel.useGitBranch) { _, enabled in
-                            if enabled && viewModel.remoteBranches.isEmpty {
-                                viewModel.refreshBranches(fetchRemote: false)
-                            }
-                        }
-                }
-
-                if viewModel.useGitBranch {
-                    GridRow {
-                        fieldTitle("远程分支")
-                        HStack {
-                            Picker("远程分支", selection: $viewModel.selectedBranch) {
-                                if viewModel.remoteBranches.isEmpty {
-                                    Text("暂无分支").tag("")
-                                } else {
-                                    ForEach(viewModel.remoteBranches, id: \.self) { branch in
-                                        Text(branch).tag(branch)
-                                    }
-                                }
-                            }
-                            .labelsHidden()
-                            .frame(maxWidth: .infinity)
-
-                            Button(viewModel.isLoadingBranches ? "刷新中…" : "刷新") {
-                                viewModel.refreshBranches()
-                            }
-                            .disabled(viewModel.isLoadingBranches || viewModel.isPackaging)
-                        }
-                    }
-
-                    GridRow {
-                        fieldTitle("依赖")
-                        Toggle("临时 Worktree 中执行 pod install", isOn: $viewModel.installPods)
-                    }
-                }
-
-                GridRow {
                     fieldTitle("Scheme")
                     TextField("例如：MyApp", text: $viewModel.scheme)
                         .textFieldStyle(.roundedBorder)
-                }
-
-                GridRow {
-                    fieldTitle("构建环境")
-                    Picker("构建环境", selection: $viewModel.configuration) {
-                        ForEach(PackagerViewModel.Configuration.allCases) { item in
-                            Text(item.rawValue).tag(item)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                }
-
-                GridRow {
-                    fieldTitle("版本号")
-                    HStack {
-                        TextField("例如：1.0.0", text: $viewModel.versionNumber)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 180)
-                        Text("留空时读取 Xcode 的 MARKETING_VERSION")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                }
-
-                GridRow {
-                    fieldTitle("Build 号")
-                    HStack {
-                        TextField("Build", text: $viewModel.buildNumber)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 180)
-                            .disabled(viewModel.usePgyerBuildNumber)
-                        Button(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询蒲公英") {
-                            viewModel.fetchNextBuildNumberFromPgyer()
-                        }
-                        .disabled(!viewModel.canFetchPgyerBuildNumber)
-                        Text(viewModel.usePgyerBuildNumber
-                             ? "打包前自动使用当前 Version 的远端最大值 +1"
-                             : "留空时读取 Xcode 的 CURRENT_PROJECT_VERSION")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                }
-
-                GridRow {
-                    fieldTitle("Build 来源")
-                    Toggle("从蒲公英自动获取", isOn: $viewModel.usePgyerBuildNumber)
-                        .toggleStyle(.switch)
                 }
 
                 GridRow {
@@ -121,8 +32,37 @@ struct PackageConfigurationView: View {
                 }
 
                 GridRow {
+                    fieldTitle("构建环境")
+                    HStack(spacing: 12) {
+                        Picker("构建环境", selection: $viewModel.configuration) {
+                            ForEach(PackagerViewModel.Configuration.allCases) { item in
+                                Text(item.rawValue).tag(item)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 180)
+                        Text("默认 Release")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                }
+
+                GridRow {
+                    DisclosureGroup(isExpanded: $showAdvancedOptions) {
+                        advancedOptions
+                            .padding(.top, 12)
+                    } label: {
+                        Label("高级选项", systemImage: "slider.horizontal.3")
+                            .fontWeight(.medium)
+                    }
+                    .gridCellColumns(2)
+                }
+
+                GridRow {
                     fieldTitle("蒲公英")
-                    Toggle("打包成功后自动上传", isOn: $viewModel.uploadToPgyer)
+                    Toggle("打包后上传蒲公英", isOn: $viewModel.uploadToPgyer)
                         .toggleStyle(.switch)
                 }
 
@@ -154,6 +94,89 @@ struct PackageConfigurationView: View {
         } label: {
             Label("打包配置", systemImage: "slider.horizontal.3")
                 .font(.headline)
+        }
+    }
+
+    private var advancedOptions: some View {
+        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 14) {
+            GridRow {
+                fieldTitle("多分支")
+                Toggle("使用独立 Worktree 打包", isOn: $viewModel.useGitBranch)
+                    .toggleStyle(.switch)
+                    .onChange(of: viewModel.useGitBranch) { _, enabled in
+                        if enabled && viewModel.remoteBranches.isEmpty {
+                            viewModel.refreshBranches(fetchRemote: false)
+                        }
+                    }
+            }
+
+            if viewModel.useGitBranch {
+                GridRow {
+                    fieldTitle("远程分支")
+                    HStack {
+                        Picker("远程分支", selection: $viewModel.selectedBranch) {
+                            if viewModel.remoteBranches.isEmpty {
+                                Text("暂无分支").tag("")
+                            } else {
+                                ForEach(viewModel.remoteBranches, id: \.self) { branch in
+                                    Text(branch).tag(branch)
+                                }
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity)
+
+                        Button(viewModel.isLoadingBranches ? "刷新中…" : "刷新") {
+                            viewModel.refreshBranches()
+                        }
+                        .disabled(viewModel.isLoadingBranches || viewModel.isPackaging)
+                    }
+                }
+
+                GridRow {
+                    fieldTitle("依赖")
+                    Toggle("临时 Worktree 中执行 pod install", isOn: $viewModel.installPods)
+                }
+            }
+
+            GridRow {
+                fieldTitle("版本号")
+                HStack {
+                    TextField("例如：1.0.0", text: $viewModel.versionNumber)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 180)
+                    Text("留空时读取 Xcode 的 MARKETING_VERSION")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+
+            GridRow {
+                fieldTitle("Build 号")
+                HStack {
+                    TextField("Build", text: $viewModel.buildNumber)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 180)
+                        .disabled(viewModel.usePgyerBuildNumber)
+                    Button(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询蒲公英") {
+                        viewModel.fetchNextBuildNumberFromPgyer()
+                    }
+                    .disabled(!viewModel.canFetchPgyerBuildNumber)
+                    Text(viewModel.usePgyerBuildNumber
+                         ? "打包前自动使用当前 Version 的远端最大值 +1"
+                         : "留空时读取 Xcode 的 CURRENT_PROJECT_VERSION")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+
+            GridRow {
+                fieldTitle("Build 来源")
+                Toggle("从蒲公英自动获取", isOn: $viewModel.usePgyerBuildNumber)
+                    .toggleStyle(.switch)
+            }
         }
     }
 
