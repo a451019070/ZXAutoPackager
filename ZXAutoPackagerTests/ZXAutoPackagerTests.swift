@@ -141,12 +141,19 @@ struct ZXAutoPackagerTests {
         )
         let card = FeishuNotifier.messageContent(notification, imageKey: "img_test")
         let elements = card["elements"] as? [[String: Any]]
-        let text = (elements?.first?["text"] as? [String: String])?["content"] ?? ""
+        let columns = elements?.first?["columns"] as? [[String: Any]]
+        let image = (columns?.first?["elements"] as? [[String: Any]])?.first
+        let textElement = (columns?.last?["elements"] as? [[String: Any]])?.first
+        let text = (textElement?["text"] as? [String: String])?["content"] ?? ""
         #expect(text.contains("Demo.ipa"))
         #expect(text.contains("1.2.3"))
         #expect(text.contains("42"))
         #expect(text.contains("https://www.pgyer.com/demo"))
-        #expect(elements?.contains { $0["tag"] as? String == "img" && $0["img_key"] as? String == "img_test" } == true)
+        #expect(elements?.first?["tag"] as? String == "column_set")
+        #expect(columns?.first?["weight"] as? Int == 1)
+        #expect(columns?.last?["weight"] as? Int == 4)
+        #expect(image?["tag"] as? String == "img")
+        #expect(image?["img_key"] as? String == "img_test")
         let cardWithoutImage = FeishuNotifier.messageContent(notification, imageKey: "")
         #expect((cardWithoutImage["elements"] as? [[String: Any]])?.count == 1)
     }

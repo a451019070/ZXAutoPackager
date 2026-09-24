@@ -66,16 +66,34 @@ nonisolated enum FeishuNotifier {
         if !notification.updateDescription.isEmpty {
             lines.append("**更新说明：** \(notification.updateDescription)")
         }
-        var elements: [[String: Any]] = [
-            ["tag": "div", "text": ["tag": "lark_md", "content": lines.joined(separator: "\n")]]
+        let text: [String: Any] = [
+            "tag": "div", "text": ["tag": "lark_md", "content": lines.joined(separator: "\n")]
         ]
         let key = imageKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        var elements: [[String: Any]] = [text]
         if !key.isEmpty {
-            elements.append([
-                "tag": "img",
-                "img_key": key,
-                "alt": ["tag": "plain_text", "content": "打包下载图片"]
-            ])
+            elements = [[
+                "tag": "column_set",
+                "flex_mode": "none",
+                "columns": [
+                    [
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [[
+                            "tag": "img",
+                            "img_key": key,
+                            "alt": ["tag": "plain_text", "content": "打包下载图片"]
+                        ]]
+                    ],
+                    [
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 4,
+                        "elements": [text]
+                    ]
+                ]
+            ]]
         }
         return [
             "header": ["title": ["tag": "plain_text", "content": "打包完成 · \(notification.scheme)"]],
