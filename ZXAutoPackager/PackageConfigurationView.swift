@@ -78,21 +78,6 @@ struct PackageConfigurationView: View {
                     }
                 }
 
-                if viewModel.platform == .iOS {
-                    GridRow {
-                        fieldTitle("蒲公英")
-                        HStack(spacing: 12) {
-                            Toggle("打包后上传蒲公英", isOn: $viewModel.uploadToPgyer)
-                                .toggleStyle(.switch)
-                            Spacer()
-                            Text(pgyerStatus)
-                                .font(.caption)
-                                .foregroundStyle(pgyerNeedsSetup ? .orange : .secondary)
-                            Button("设置…") { showPgyerSettings = true }
-                        }
-                    }
-                }
-
                 if viewModel.platform == .iOS && viewModel.uploadToPgyer {
                     GridRow {
                         fieldTitle("更新说明")
@@ -100,26 +85,25 @@ struct PackageConfigurationView: View {
                             .textFieldStyle(.roundedBorder)
                     }
                 }
-
-                GridRow {
-                    fieldTitle("飞书")
-                    HStack(spacing: 12) {
-                        Toggle("打包后发送飞书通知", isOn: $viewModel.sendToFeishu)
-                            .toggleStyle(.switch)
-                        Spacer()
-                        Text(feishuStatus)
-                            .font(.caption)
-                            .foregroundStyle(feishuNeedsSetup ? .orange : .secondary)
-                        Button("设置…") { showFeishuSettings = true }
-                    }
-                }
             }
             .padding(8)
         } label: {
-            HStack {
+            HStack(spacing: 10) {
                 Label("打包配置", systemImage: "slider.horizontal.3")
                     .font(.headline)
                 Spacer()
+                if !enabledOptions.isEmpty {
+                    Button {
+                        showAdvancedOptions = true
+                    } label: {
+                        Text(enabledOptions.joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(optionsNeedSetup ? .orange : .secondary)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .help(optionsNeedSetup ? "已开启的选项中有待配置项；点击查看高级选项" : "已开启的选项；点击查看高级选项")
+                }
                 Button("高级选项…") { showAdvancedOptions = true }
             }
         }
@@ -127,12 +111,6 @@ struct PackageConfigurationView: View {
         .frame(maxWidth: .infinity)
         .sheet(isPresented: $showAdvancedOptions) {
             advancedSettings
-        }
-        .sheet(isPresented: $showPgyerSettings) {
-            pgyerSettings
-        }
-        .sheet(isPresented: $showFeishuSettings) {
-            feishuSettings
         }
     }
 
@@ -188,6 +166,20 @@ struct PackageConfigurationView: View {
         }
     }
 
+    private var enabledOptions: [String] {
+        var options: [String] = []
+        if viewModel.useGitBranch { options.append("Worktree") }
+        if viewModel.platform == .iOS && viewModel.uploadToPgyer { options.append("蒲公英") }
+        if viewModel.sendToFeishu { options.append("飞书") }
+        return options
+    }
+
+    private var optionsNeedSetup: Bool {
+        (viewModel.useGitBranch && viewModel.selectedBranch.isEmpty) ||
+        (viewModel.platform == .iOS && viewModel.uploadToPgyer && pgyerNeedsSetup) ||
+        feishuNeedsSetup
+    }
+
     private var pgyerNeedsSetup: Bool {
         let apiKeyMissing = viewModel.pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let appKeyMissing = viewModel.usePgyerBuildNumber && viewModel.pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -208,65 +200,6 @@ struct PackageConfigurationView: View {
         if feishuNeedsSetup { return "待配置" }
         if viewModel.sendToFeishu { return "已启用 · 已配置" }
         return FeishuNotifier.validWebhook(viewModel.feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) == nil ? "未配置" : "已配置"
-    }
-
-    private var pgyerSettings: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("蒲公英设置")
-                .font(.title3.bold())
-            Text("填写一次后会保留，下次打包无需重复输入。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            LabeledContent("API Key") {
-                SecureField("蒲公英 API Key", text: $viewModel.pgyerAPIKey)
-                    .textFieldStyle(.roundedBorder)
-            }
-            LabeledContent("App Key") {
-                SecureField("蒲公英应用 App Key", text: $viewModel.pgyerAppKey)
-                    .textFieldStyle(.roundedBorder)
-            }
-            Text("仅从蒲公英查询 Build 号时需要 App Key。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button("完成") { showPgyerSettings = false }
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(24)
-        .frame(width: 480)
-    }
-
-    private var feishuSettings: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("飞书设置")
-                .font(.title3.bold())
-            Text("填写一次后会保留，下次打包无需重复输入。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            LabeledContent("Webhook") {
-                SecureField("飞书群自定义机器人 Webhook 地址", text: $viewModel.feishuWebhook)
-                    .textFieldStyle(.roundedBorder)
-            }
-            LabeledContent("图片 imageKey") {
-                TextField("可选，填写已上传至飞书的图片 imageKey", text: $viewModel.feishuImageKey)
-                    .textFieldStyle(.roundedBorder)
-            }
-            if viewModel.feishuImageKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Link("点击获取 imageKey", destination: URL(string: "https://open.larkoffice.com/cardkit")!)
-            }
-            Text("卡片使用已有 imageKey 显示图片；不会自动上传本次下载地址的二维码。下载地址来自蒲公英。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button("完成") { showFeishuSettings = false }
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(24)
-        .frame(width: 480)
     }
 
     private var advancedSettings: some View {
@@ -326,6 +259,74 @@ struct PackageConfigurationView: View {
                 }
             }
 
+            if viewModel.platform == .iOS {
+                GridRow {
+                    fieldTitle("蒲公英")
+                    HStack(spacing: 12) {
+                        Toggle("打包后上传蒲公英", isOn: $viewModel.uploadToPgyer)
+                            .toggleStyle(.switch)
+                        Spacer()
+                        Text(pgyerStatus)
+                            .font(.caption)
+                            .foregroundStyle(pgyerNeedsSetup ? .orange : .secondary)
+                        Button(showPgyerSettings ? "收起配置" : "配置…") {
+                            showPgyerSettings.toggle()
+                        }
+                    }
+                }
+                if showPgyerSettings {
+                    GridRow {
+                        fieldTitle("API Key")
+                        SecureField("蒲公英 API Key", text: $viewModel.pgyerAPIKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        fieldTitle("App Key")
+                        VStack(alignment: .leading, spacing: 4) {
+                            SecureField("蒲公英应用 App Key", text: $viewModel.pgyerAppKey)
+                                .textFieldStyle(.roundedBorder)
+                            Text("仅从蒲公英查询 Build 号时需要 App Key。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            GridRow {
+                fieldTitle("飞书")
+                HStack(spacing: 12) {
+                    Toggle("打包后发送飞书通知", isOn: $viewModel.sendToFeishu)
+                        .toggleStyle(.switch)
+                    Spacer()
+                    Text(feishuStatus)
+                        .font(.caption)
+                        .foregroundStyle(feishuNeedsSetup ? .orange : .secondary)
+                    Button(showFeishuSettings ? "收起配置" : "配置…") {
+                        showFeishuSettings.toggle()
+                    }
+                }
+            }
+            if showFeishuSettings {
+                GridRow {
+                    fieldTitle("Webhook")
+                    SecureField("飞书群自定义机器人 Webhook 地址", text: $viewModel.feishuWebhook)
+                        .textFieldStyle(.roundedBorder)
+                }
+                GridRow {
+                    fieldTitle("imageKey")
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("可选，填写已上传至飞书的图片 imageKey", text: $viewModel.feishuImageKey)
+                            .textFieldStyle(.roundedBorder)
+                        if viewModel.feishuImageKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Link("点击获取 imageKey", destination: URL(string: "https://open.larkoffice.com/cardkit")!)
+                        }
+                        Text("卡片使用已有 imageKey 显示图片；不会自动上传本次下载地址的二维码。下载地址来自蒲公英。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 
