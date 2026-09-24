@@ -291,11 +291,20 @@ final class PackagerViewModel: ObservableObject {
 
     func refreshBranches(fetchRemote: Bool = true) {
         guard !containerPath.isEmpty, !isLoadingBranches, !isPackaging else { return }
+        guard let projectAccess = restoreAccess(
+            bookmarkKey: Keys.projectBookmark,
+            fallbackPath: containerPath,
+            directoryName: "项目目录"
+        ) else {
+            return
+        }
+
         isLoadingBranches = true
         statusMessage = fetchRemote ? "正在刷新远程分支…" : "正在读取远程分支…"
-        let projectPath = containerPath
+        let projectPath = projectAccess.url.path
 
         Task.detached(priority: .userInitiated) {
+            defer { projectAccess.stop() }
             do {
                 let branches = try GitWorktreeManager.listRemoteBranches(
                     projectPath: projectPath,
