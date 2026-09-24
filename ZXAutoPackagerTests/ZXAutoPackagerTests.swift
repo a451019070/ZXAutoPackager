@@ -13,6 +13,35 @@ struct ZXAutoPackagerTests {
         #expect(PgyerUploader.maximumBuildNumber(in: records, matching: "1.0") == 10)
     }
 
+    @Test func parsesXcodeBuildVersionFromApplicationTarget() throws {
+        let output = """
+        xcodebuild note
+        [
+          {
+            "target": "MyAppTests",
+            "buildSettings": {
+              "PRODUCT_TYPE": "com.apple.product-type.bundle.unit-test",
+              "MARKETING_VERSION": "9.9",
+              "CURRENT_PROJECT_VERSION": "999"
+            }
+          },
+          {
+            "target": "MyApp",
+            "buildSettings": {
+              "PRODUCT_TYPE": "com.apple.product-type.application",
+              "MARKETING_VERSION": "1.2.3",
+              "CURRENT_PROJECT_VERSION": "42"
+            }
+          }
+        ]
+        """
+
+        let version = try XcodePackager.parseBuildVersion(from: output, scheme: "MyApp")
+
+        #expect(version.marketingVersion == "1.2.3")
+        #expect(version.currentProjectVersion == "42")
+    }
+
     @Test func maximumPgyerBuildNumberReturnsNilWithoutMatchingBuild() {
         let records = [
             PgyerBuildRecord(buildKey: "a", buildVersion: "2.0", buildVersionNo: "3")

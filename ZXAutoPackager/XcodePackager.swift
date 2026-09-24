@@ -47,7 +47,100 @@ private struct CommandResult {
     let output: String
 }
 
+nonisolated struct XcodeBuildVersion: Sendable, Equatable {
+    let marketingVersion: String
+    let currentProjectVersion: String
+}
+
 nonisolated enum XcodePackager {
+    private struct BuildSettingsEntry: Decodable {
+        let target: String?
+        let buildSettings: [String: String]
+    }
+
+    static func readBuildVersion(
+        containerPath: String,
+        scheme: String,
+        configuration: String,
+        cancellation: BuildCancellationController
+    ) throws -> XcodeBuildVersion {
+        guard !cancellation.isCancelled else { throw PackageError.cancelled }
+
+        let projectDirectoryURL = URL(fileURLWithPath: containerPath, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: projectDirectoryURL.path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            throw PackageError.invalidInput("所选项目文件夹不存在。")
+        }
+
+        let containerURL = try findXcodeContainer(in: projectDirectoryURL)
+        let result = try runXcodebuild(
+            try arguments(for: containerURL) + [
+                "-scheme", scheme,
+                "-configuration", configuration,
+                "-destination", "generic/platform=iOS",
+                "-showBuildSettings",
+                "-json"
+            ],
+            cancellation: cancellation,
+            onOutput: { _ in }
+        )
+        guard !cancellation.isCancelled else { throw PackageError.cancelled }
+        guard result.status == 0 else {
+            throw PackageError.commandFailed(result.status, result.output)
+        }
+
+        return try parseBuildVersion(from: result.output, scheme: scheme)
+    }
+
+    static func parseBuildVersion(from output: String, scheme: String) throws -> XcodeBuildVersion {
+        guard let start = output.firstIndex(of: "["),
+              let end = output.lastIndex(of: "]"),
+              start <= end else {
+            throw PackageError.invalidInput("无法解析 Xcode 构建设置。")
+        }
+
+        let json = String(output[start...end])
+        let entries: [BuildSettingsEntry]
+        do {
+            entries = try JSONDecoder().decode([BuildSettingsEntry].self, from: Data(json.utf8))
+        } catch {
+            throw PackageError.invalidInput("无法解析 Xcode 构建设置：\(error.localizedDescription)")
+        }
+
+        let applicationEntries = entries.filter {
+            $0.buildSettings["PRODUCT_TYPE"] == "com.apple.product-type.application" ||
+                $0.buildSettings["WRAPPER_EXTENSION"] == "app"
+        }
+        let candidates = applicationEntries.isEmpty ? entries : applicationEntries
+        let selected = candidates.first {
+            $0.target == scheme ||
+                $0.buildSettings["TARGET_NAME"] == scheme ||
+                $0.buildSettings["PRODUCT_NAME"] == scheme
+        } ?? candidates.first
+
+        guard let settings = selected?.buildSettings else {
+            throw PackageError.invalidInput("所选 Scheme 没有可用的 Xcode 构建设置。")
+        }
+
+        let version = settings["MARKETING_VERSION"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let build = settings["CURRENT_PROJECT_VERSION"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !version.isEmpty || !build.isEmpty else {
+            throw PackageError.invalidInput(
+                "Xcode 项目中未配置 MARKETING_VERSION 或 CURRENT_PROJECT_VERSION。"
+            )
+        }
+
+        return XcodeBuildVersion(
+            marketingVersion: version,
+            currentProjectVersion: build
+        )
+    }
+
     static func package(
         _ request: PackageRequest,
         cancellation: BuildCancellationController,

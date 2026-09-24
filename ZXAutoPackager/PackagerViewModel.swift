@@ -101,7 +101,7 @@ final class PackagerViewModel: ObservableObject {
     @Published var configuration: Configuration = .release {
         didSet { defaults.set(configuration.rawValue, forKey: Keys.configuration) }
     }
-    @Published var versionNumber = "1.0" {
+    @Published var versionNumber = "" {
         didSet { defaults.set(versionNumber, forKey: Keys.versionNumber) }
     }
     @Published var buildNumber = "" {
@@ -122,9 +122,7 @@ final class PackagerViewModel: ObservableObject {
     @Published var pgyerAppKey = "" {
         didSet { defaults.set(pgyerAppKey, forKey: Keys.pgyerAppKey) }
     }
-    @Published var updateDescription = "" {
-        didSet { defaults.set(updateDescription, forKey: Keys.updateDescription) }
-    }
+    @Published var updateDescription = ""
     @Published var useGitBranch = false {
         didSet { defaults.set(useGitBranch, forKey: Keys.useGitBranch) }
     }
@@ -159,7 +157,6 @@ final class PackagerViewModel: ObservableObject {
         static let usePgyerBuildNumber = "ZXAutoPackager.usePgyerBuildNumber"
         static let pgyerAPIKey = "ZXAutoPackager.pgyerAPIKey"
         static let pgyerAppKey = "ZXAutoPackager.pgyerAppKey"
-        static let updateDescription = "ZXAutoPackager.updateDescription"
         static let useGitBranch = "ZXAutoPackager.useGitBranch"
         static let selectedBranch = "ZXAutoPackager.selectedBranch"
         static let installPods = "ZXAutoPackager.installPods"
@@ -186,25 +183,21 @@ final class PackagerViewModel: ObservableObject {
         configuration = Configuration(
             rawValue: defaults.string(forKey: Keys.configuration) ?? ""
         ) ?? .release
-        versionNumber = defaults.string(forKey: Keys.versionNumber) ?? "1.0"
+        versionNumber = defaults.string(forKey: Keys.versionNumber) ?? ""
         outputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
         uploadToPgyer = defaults.bool(forKey: Keys.uploadToPgyer)
-        usePgyerBuildNumber = defaults.bool(forKey: Keys.usePgyerBuildNumber)
+        usePgyerBuildNumber = false
+        defaults.set(false, forKey: Keys.usePgyerBuildNumber)
         pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
         pgyerAppKey = defaults.string(forKey: Keys.pgyerAppKey) ?? ""
-        updateDescription = defaults.string(forKey: Keys.updateDescription) ?? ""
+        defaults.removeObject(forKey: "ZXAutoPackager.updateDescription")
         useGitBranch = defaults.bool(forKey: Keys.useGitBranch)
         selectedBranch = defaults.string(forKey: Keys.selectedBranch) ?? ""
         installPods = defaults.object(forKey: Keys.installPods) == nil
             ? true
             : defaults.bool(forKey: Keys.installPods)
 
-        if let savedBuild = defaults.string(forKey: Keys.buildNumber), !savedBuild.isEmpty {
-            buildNumber = savedBuild
-        } else {
-            let lastBuild = defaults.integer(forKey: Keys.lastSuccessfulBuild)
-            buildNumber = String(max(lastBuild + 1, 1))
-        }
+        buildNumber = defaults.string(forKey: Keys.buildNumber) ?? ""
 
         if !containerPath.isEmpty || !outputDirectory.isEmpty {
             statusMessage = "已恢复上次填写的打包配置"
@@ -212,12 +205,17 @@ final class PackagerViewModel: ObservableObject {
     }
 
     var canPackage: Bool {
-        !isPackaging &&
+        let trimmedVersion = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let versionCanResolve = trimmedVersion.isEmpty || isValidVersionNumber
+        let buildCanResolve = usePgyerBuildNumber || trimmedBuild.isEmpty || Int(trimmedBuild).map { $0 > 0 } == true
+
+        return !isPackaging &&
         !isLoadingPgyerBuildNumber &&
         !containerPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        isValidVersionNumber &&
-        (usePgyerBuildNumber || Int(buildNumber).map { $0 > 0 } == true) &&
+        versionCanResolve &&
+        buildCanResolve &&
         !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (!(uploadToPgyer || usePgyerBuildNumber) || hasPgyerAPIKey) &&
         (!usePgyerBuildNumber || hasPgyerAppKey) &&
@@ -367,54 +365,8 @@ final class PackagerViewModel: ObservableObject {
     }
 
     func startPackaging() {
-        guard isValidVersionNumber else {
-            statusMessage = "版本号格式不正确，例如：1.0 或 1.2.3"
-            return
-        }
-
-        if usePgyerBuildNumber {
-            guard canFetchPgyerBuildNumber else {
-                statusMessage = "请填写蒲公英 API Key 和 App Key"
-                return
-            }
-
-            isLoadingPgyerBuildNumber = true
-            statusMessage = "正在从蒲公英获取下一 Build 号…"
-            let apiKey = pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let appKey = pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let version = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            Task {
-                do {
-                    let build = try await PgyerUploader.nextBuildNumber(
-                        apiKey: apiKey,
-                        appKey: appKey,
-                        version: version
-                    ) { _ in }
-                    self.buildNumber = String(build)
-                    self.isLoadingPgyerBuildNumber = false
-                    self.startPackaging(build: build)
-                } catch is CancellationError {
-                    self.isLoadingPgyerBuildNumber = false
-                    self.statusMessage = "已取消查询蒲公英 Build 号"
-                } catch {
-                    self.isLoadingPgyerBuildNumber = false
-                    self.statusMessage = "蒲公英 Build 号查询失败：\(error.localizedDescription)"
-                }
-            }
-            return
-        }
-
-        guard let build = Int(buildNumber), build > 0 else {
-            statusMessage = "Build 号必须是大于 0 的整数"
-            return
-        }
-        startPackaging(build: build)
-    }
-
-    private func startPackaging(build: Int) {
         guard canPackage else {
-            statusMessage = "请完整填写工程、Scheme、Build 号、导出目录及所需的蒲公英配置"
+            statusMessage = "请完整填写工程、Scheme、导出目录及所需的蒲公英配置"
             return
         }
 
@@ -434,24 +386,18 @@ final class PackagerViewModel: ObservableObject {
             return
         }
 
-        let request = PackageRequest(
-            containerPath: projectAccess.url.path,
-            scheme: scheme.trimmingCharacters(in: .whitespacesAndNewlines),
-            configuration: configuration.rawValue,
-            versionNumber: versionNumber.trimmingCharacters(in: .whitespacesAndNewlines),
-            buildNumber: build,
-            outputDirectory: outputAccess.url.path
-        )
-
+        let scheme = scheme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configuration = configuration.rawValue
+        let enteredVersion = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let enteredBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let shouldUploadToPgyer = uploadToPgyer
+        let shouldUsePgyerBuildNumber = usePgyerBuildNumber
         let shouldUseGitBranch = useGitBranch
         let branchToBuild = selectedBranch
         let shouldInstallPods = installPods
-        let pgyerRequest = PgyerUploadRequest(
-            apiKey: pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
-            ipaPath: "",
-            updateDescription: updateDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
+        let apiKey = pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let appKey = pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let updateDescription = updateDescription.trimmingCharacters(in: .whitespacesAndNewlines)
 
         isPackaging = true
         elapsedSeconds = 0
@@ -460,7 +406,9 @@ final class PackagerViewModel: ObservableObject {
         packageSummary = nil
         pgyerDownloadURL = nil
         log = ""
-        statusMessage = "正在归档并导出 \(configuration.rawValue) IPA…"
+        statusMessage = enteredVersion.isEmpty || (!shouldUsePgyerBuildNumber && enteredBuild.isEmpty)
+            ? "正在读取 Xcode 项目的版本信息…"
+            : "正在准备打包…"
 
         let logBuffer = BuildLogBuffer()
         startLogRefresh(from: logBuffer)
@@ -476,11 +424,12 @@ final class PackagerViewModel: ObservableObject {
                 projectAccess.stop()
                 outputAccess.stop()
             }
+
             do {
-                var effectiveRequest = request
+                var effectiveProjectPath = projectAccess.url.path
                 if shouldUseGitBranch {
                     let context = try GitWorktreeManager.prepare(
-                        projectPath: request.containerPath,
+                        projectPath: effectiveProjectPath,
                         branch: branchToBuild,
                         installPods: shouldInstallPods,
                         cancellation: cancellation
@@ -488,18 +437,74 @@ final class PackagerViewModel: ObservableObject {
                         logBuffer.append(chunk)
                     }
                     worktreeContext = context
-                    effectiveRequest = PackageRequest(
-                        containerPath: context.projectDirectory.path,
-                        scheme: request.scheme,
-                        configuration: request.configuration,
-                        versionNumber: request.versionNumber,
-                        buildNumber: request.buildNumber,
-                        outputDirectory: request.outputDirectory
+                    effectiveProjectPath = context.projectDirectory.path
+                }
+
+                var resolvedVersion = enteredVersion
+                var resolvedBuild = enteredBuild
+                if resolvedVersion.isEmpty || (!shouldUsePgyerBuildNumber && resolvedBuild.isEmpty) {
+                    logBuffer.append("\n===== 读取 Xcode 版本信息 =====\n")
+                    let projectVersion = try XcodePackager.readBuildVersion(
+                        containerPath: effectiveProjectPath,
+                        scheme: scheme,
+                        configuration: configuration,
+                        cancellation: cancellation
+                    )
+                    if resolvedVersion.isEmpty {
+                        resolvedVersion = projectVersion.marketingVersion
+                    }
+                    if !shouldUsePgyerBuildNumber && resolvedBuild.isEmpty {
+                        resolvedBuild = projectVersion.currentProjectVersion
+                    }
+                }
+
+                guard !resolvedVersion.isEmpty,
+                      resolvedVersion.range(
+                        of: #"^\d+(\.\d+)*$"#,
+                        options: .regularExpression
+                      ) != nil else {
+                    throw PackageError.invalidInput(
+                        "Xcode 的 MARKETING_VERSION 格式不正确，例如应为 1.0 或 1.2.3。"
                     )
                 }
 
+                let build: Int
+                if shouldUsePgyerBuildNumber {
+                    await MainActor.run {
+                        self.isLoadingPgyerBuildNumber = true
+                        self.statusMessage = "正在从蒲公英获取下一 Build 号…"
+                    }
+                    build = try await PgyerUploader.nextBuildNumber(
+                        apiKey: apiKey,
+                        appKey: appKey,
+                        version: resolvedVersion
+                    ) { _ in }
+                } else {
+                    guard let value = Int(resolvedBuild), value > 0 else {
+                        throw PackageError.invalidInput(
+                            "Xcode 的 CURRENT_PROJECT_VERSION 必须是大于 0 的整数。"
+                        )
+                    }
+                    build = value
+                }
+
+                await MainActor.run {
+                    self.versionNumber = resolvedVersion
+                    self.buildNumber = String(build)
+                    self.isLoadingPgyerBuildNumber = false
+                    self.statusMessage = "正在归档并导出 \(configuration) IPA…"
+                }
+
+                let request = PackageRequest(
+                    containerPath: effectiveProjectPath,
+                    scheme: scheme,
+                    configuration: configuration,
+                    versionNumber: resolvedVersion,
+                    buildNumber: build,
+                    outputDirectory: outputAccess.url.path
+                )
                 let packageResult = try XcodePackager.package(
-                    effectiveRequest,
+                    request,
                     cancellation: cancellation
                 ) { chunk in
                     logBuffer.append(chunk)
@@ -510,12 +515,12 @@ final class PackagerViewModel: ObservableObject {
                 var uploadResult: PgyerUploadResult?
                 if shouldUploadToPgyer {
                     let finalUpdateDescription = Self.makeUploadDescription(
-                        userDescription: pgyerRequest.updateDescription,
+                        userDescription: updateDescription,
                         packageResult: packageResult
                     )
                     logBuffer.append("\n===== 更新说明 =====\n\(finalUpdateDescription)\n")
                     let uploadRequest = PgyerUploadRequest(
-                        apiKey: pgyerRequest.apiKey,
+                        apiKey: apiKey,
                         ipaPath: packageResult.artifactPath,
                         updateDescription: finalUpdateDescription
                     )
@@ -528,6 +533,7 @@ final class PackagerViewModel: ObservableObject {
                     self.finishLogRefresh(from: logBuffer)
                     self.stopElapsedTimer()
                     self.isPackaging = false
+                    self.isLoadingPgyerBuildNumber = false
                     self.packageTask = nil
                     self.cancellationController = nil
                     self.lastArtifactPath = packageResult.artifactPath
@@ -550,12 +556,14 @@ final class PackagerViewModel: ObservableObject {
                     }
                     self.defaults.set(build, forKey: Keys.lastSuccessfulBuild)
                     self.buildNumber = String(build + 1)
+                    self.updateDescription = ""
                 }
             } catch {
                 await MainActor.run {
                     self.finishLogRefresh(from: logBuffer)
                     self.stopElapsedTimer()
                     self.isPackaging = false
+                    self.isLoadingPgyerBuildNumber = false
                     self.packageTask = nil
                     self.cancellationController = nil
                     if error is CancellationError || cancellation.isCancelled {
@@ -564,7 +572,7 @@ final class PackagerViewModel: ObservableObject {
                     } else {
                         let summary = self.errorSummary(error)
                         self.appendLog("\n\n===== 打包失败 =====\n\(summary)\n")
-                        self.statusMessage = "打包失败，请查看日志末尾"
+                        self.statusMessage = summary
                     }
                 }
             }

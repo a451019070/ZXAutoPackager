@@ -78,7 +78,7 @@ struct PackageConfigurationView: View {
                         TextField("例如：1.0.0", text: $viewModel.versionNumber)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 180)
-                        Text("对应 Xcode 的 Version")
+                        Text("留空时读取 Xcode 的 MARKETING_VERSION")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -98,7 +98,7 @@ struct PackageConfigurationView: View {
                         .disabled(!viewModel.canFetchPgyerBuildNumber)
                         Text(viewModel.usePgyerBuildNumber
                              ? "打包前自动使用当前 Version 的远端最大值 +1"
-                             : "手动填写，成功后本地 +1")
+                             : "留空时读取 Xcode 的 CURRENT_PROJECT_VERSION")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
