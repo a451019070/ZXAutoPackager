@@ -91,11 +91,24 @@ struct PackageConfigurationView: View {
                         TextField("Build", text: $viewModel.buildNumber)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 180)
-                        Text("成功后自动保存，下次默认 +1")
+                            .disabled(viewModel.usePgyerBuildNumber)
+                        Button(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询蒲公英") {
+                            viewModel.fetchNextBuildNumberFromPgyer()
+                        }
+                        .disabled(!viewModel.canFetchPgyerBuildNumber)
+                        Text(viewModel.usePgyerBuildNumber
+                             ? "打包前自动使用当前 Version 的远端最大值 +1"
+                             : "手动填写，成功后本地 +1")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
                     }
+                }
+
+                GridRow {
+                    fieldTitle("Build 来源")
+                    Toggle("从蒲公英自动获取", isOn: $viewModel.usePgyerBuildNumber)
+                        .toggleStyle(.switch)
                 }
 
                 GridRow {
@@ -113,13 +126,23 @@ struct PackageConfigurationView: View {
                         .toggleStyle(.switch)
                 }
 
-                if viewModel.uploadToPgyer {
+                if viewModel.uploadToPgyer || viewModel.usePgyerBuildNumber {
                     GridRow {
                         fieldTitle("API Key")
                         SecureField("蒲公英 API Key", text: $viewModel.pgyerAPIKey)
                             .textFieldStyle(.roundedBorder)
                     }
+                }
 
+                if viewModel.usePgyerBuildNumber {
+                    GridRow {
+                        fieldTitle("App Key")
+                        SecureField("蒲公英应用 App Key", text: $viewModel.pgyerAppKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
+                if viewModel.uploadToPgyer {
                     GridRow {
                         fieldTitle("更新说明")
                         TextField("可选，本次版本更新内容", text: $viewModel.updateDescription)
