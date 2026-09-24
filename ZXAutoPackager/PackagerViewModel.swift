@@ -222,8 +222,7 @@ final class PackagerViewModel: ObservableObject {
         versionNumber = defaults.string(forKey: Keys.versionNumber) ?? ""
         outputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
         uploadToPgyer = platform == .iOS && defaults.bool(forKey: Keys.uploadToPgyer)
-        usePgyerBuildNumber = false
-        defaults.set(false, forKey: Keys.usePgyerBuildNumber)
+        usePgyerBuildNumber = platform == .iOS && defaults.bool(forKey: Keys.usePgyerBuildNumber)
         pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
         pgyerAppKey = defaults.string(forKey: Keys.pgyerAppKey) ?? ""
         sendToFeishu = defaults.bool(forKey: Keys.sendToFeishu)

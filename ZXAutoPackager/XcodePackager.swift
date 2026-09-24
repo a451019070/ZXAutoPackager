@@ -222,6 +222,7 @@ nonisolated enum XcodePackager {
                 "-archivePath", archiveURL.path,
                 "MARKETING_VERSION=\(request.versionNumber)",
                 "CURRENT_PROJECT_VERSION=\(request.buildNumber)",
+                "DEBUG_INFORMATION_FORMAT=dwarf-with-dsym",
                 "clean", "archive"
             ],
             cancellation: cancellation,
@@ -262,6 +263,7 @@ nonisolated enum XcodePackager {
             }
             artifactURL = artifactDirectoryURL.appendingPathComponent(baseName + ".ipa")
             try fileManager.copyItem(at: ipaURL, to: artifactURL)
+            try copyArchivedDSYMs(from: archiveURL, to: artifactDirectoryURL)
             try copyExportMetadata(from: exportURL, to: artifactDirectoryURL)
         } else {
             guard let appURL = findArchivedApp(in: archiveURL) else {
@@ -288,6 +290,12 @@ nonisolated enum XcodePackager {
 
         let fileAttributes = try fileManager.attributesOfItem(atPath: artifactURL.path)
         let fileSize = (fileAttributes[.size] as? NSNumber)?.int64Value ?? 0
+
+        let archivesURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Developer/Xcode/Archives", isDirectory: true)
+        let savedArchiveURL = try saveXcodeArchive(from: archiveURL, for: request.scheme, in: archivesURL)
+        onOutput("归档已保存：\(savedArchiveURL.path)\n")
+        try writeLog("\n归档已保存：\(savedArchiveURL.path)\n", to: buildLogHandle)
 
         return PackageResult(
             artifactPath: artifactURL.path,
@@ -505,6 +513,31 @@ nonisolated enum XcodePackager {
         return importantLines.suffix(20).joined(separator: "\n")
     }
 
+    static func copyArchivedDSYMs(from archiveURL: URL, to artifactDirectoryURL: URL) throws {
+        let fileManager = FileManager.default
+        let sourceURL = archiveURL.appendingPathComponent("dSYMs", isDirectory: true)
+        let symbols = (try? fileManager.contentsOfDirectory(
+            at: sourceURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ))?.filter {
+            $0.pathExtension.lowercased() == "dsym" &&
+                ((try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true)
+        } ?? []
+        guard !symbols.isEmpty else {
+            throw PackageError.invalidInput("归档中没有找到 dSYM 文件，请确认应用目标支持生成调试符号。")
+        }
+
+        let destinationURL = artifactDirectoryURL.appendingPathComponent("dSYMs", isDirectory: true)
+        try fileManager.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        for symbol in symbols {
+            try fileManager.copyItem(
+                at: symbol,
+                to: destinationURL.appendingPathComponent(symbol.lastPathComponent, isDirectory: true)
+            )
+        }
+    }
+
     private static func copyExportMetadata(from sourceURL: URL, to destinationURL: URL) throws {
         let fileManager = FileManager.default
         for fileName in ["ExportOptions.plist", "Packaging.log", "DistributionSummary.plist"] {
@@ -514,6 +547,46 @@ nonisolated enum XcodePackager {
                 at: sourceFileURL,
                 to: destinationURL.appendingPathComponent(fileName)
             )
+        }
+    }
+
+    static func saveXcodeArchive(
+        from sourceURL: URL,
+        for scheme: String,
+        in archivesURL: URL,
+        at date: Date = Date()
+    ) throws -> URL {
+        let fileManager = FileManager.default
+        var destinationURL = try xcodeArchiveURL(for: scheme, in: archivesURL, at: date)
+        while true {
+            do {
+                try fileManager.moveItem(at: sourceURL, to: destinationURL)
+                return destinationURL
+            } catch let error as NSError where error.domain == NSCocoaErrorDomain &&
+                error.code == CocoaError.fileWriteFileExists.rawValue {
+                destinationURL = try xcodeArchiveURL(for: scheme, in: archivesURL, at: date)
+            }
+        }
+    }
+
+    static func xcodeArchiveURL(for scheme: String, in archivesURL: URL, at date: Date = Date()) throws -> URL {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        let dayURL = archivesURL.appendingPathComponent(formatter.string(from: date), isDirectory: true)
+        try FileManager.default.createDirectory(at: dayURL, withIntermediateDirectories: true)
+
+        formatter.dateFormat = "yyyy-M-d, H.mm"
+        let name = "\(safeFileName(scheme)) \(formatter.string(from: date))"
+        var suffix = 1
+        while true {
+            let fileName = suffix == 1 ? name : "\(name) \(suffix)"
+            let candidate = dayURL.appendingPathComponent(fileName + ".xcarchive", isDirectory: true)
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            suffix += 1
         }
     }
 
