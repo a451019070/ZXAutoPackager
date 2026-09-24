@@ -132,11 +132,23 @@ nonisolated enum GitWorktreeManager {
                 throw GitPreparationError.podfileNotFound
             }
 
+            let searchPaths = commandSearchPaths(existingPath: ProcessInfo.processInfo.environment["PATH"])
+            guard let podExecutable = searchPaths
+                .map({ URL(fileURLWithPath: $0).appendingPathComponent("pod").path })
+                .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+                cleanup(repositoryRoot: root, worktreeRoot: worktreeRoot)
+                throw GitPreparationError.commandFailed(
+                    "pod install",
+                    127,
+                    "未找到 CocoaPods。请确认终端可执行 pod，并检查路径：\n\(searchPaths.joined(separator: "\n"))"
+                )
+            }
+
             onOutput("===== 安装 CocoaPods 依赖 =====\n")
-            onOutput("正在执行 pod install…\n")
+            onOutput("正在执行 \(podExecutable) install…\n")
             let podResult = try run(
-                executable: "/usr/bin/env",
-                arguments: ["pod", "install"],
+                executable: podExecutable,
+                arguments: ["install"],
                 currentDirectory: temporaryProjectURL,
                 cancellation: cancellation
             )
@@ -198,6 +210,41 @@ nonisolated enum GitWorktreeManager {
         let output: String
     }
 
+    private static func commandSearchPaths(existingPath: String?) -> [String] {
+        let fileManager = FileManager.default
+        let homeDirectory = fileManager.homeDirectoryForCurrentUser.path
+        var paths = [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/opt/ruby/bin",
+            "/usr/local/bin",
+            "/usr/local/opt/ruby/bin"
+        ]
+
+        for gemRoot in [
+            "/opt/homebrew/lib/ruby/gems",
+            "/usr/local/lib/ruby/gems",
+            "\(homeDirectory)/.gem/ruby"
+        ] {
+            guard let versions = try? fileManager.contentsOfDirectory(atPath: gemRoot) else { continue }
+            paths.append(contentsOf: versions.map { "\(gemRoot)/\($0)/bin" })
+        }
+
+        paths.append(contentsOf: [
+            "\(homeDirectory)/.rbenv/shims",
+            "\(homeDirectory)/.rvm/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ])
+        if let existingPath {
+            paths.append(contentsOf: existingPath.split(separator: ":").map(String.init))
+        }
+
+        var seen = Set<String>()
+        return paths.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
     private static func run(
         executable: String,
         arguments: [String],
@@ -213,13 +260,10 @@ nonisolated enum GitWorktreeManager {
         process.standardError = pipe
 
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-            environment["PATH"] ?? ""
-        ].joined(separator: ":")
+        environment["PATH"] = commandSearchPaths(existingPath: environment["PATH"])
+            .joined(separator: ":")
+        environment["LANG"] = "en_US.UTF-8"
+        environment["LC_ALL"] = "en_US.UTF-8"
         process.environment = environment
 
         try process.run()
