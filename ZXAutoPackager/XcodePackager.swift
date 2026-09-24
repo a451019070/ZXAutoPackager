@@ -61,8 +61,9 @@ nonisolated enum XcodePackager {
     static func listSchemes(containerPath: String) throws -> [String] {
         let directoryURL = URL(fileURLWithPath: containerPath, isDirectory: true)
         let containerURL = try findXcodeContainer(in: directoryURL)
+        let schemeContainerURL = try findMainProject(in: directoryURL, workspaceURL: containerURL) ?? containerURL
         let result = try runXcodebuild(
-            try arguments(for: containerURL) + ["-list", "-json"],
+            try arguments(for: schemeContainerURL) + ["-list", "-json"],
             cancellation: BuildCancellationController(),
             onOutput: { _ in }
         )
@@ -467,6 +468,29 @@ nonisolated enum XcodePackager {
         case "xcodeproj": return ["-project", containerURL.path]
         default: throw PackageError.invalidInput("请选择包含 .xcodeproj 或 .xcworkspace 的项目目录。")
         }
+    }
+
+    private static func findMainProject(in directoryURL: URL, workspaceURL: URL) throws -> URL? {
+        guard workspaceURL.pathExtension.lowercased() == "xcworkspace" else { return nil }
+
+        let projects = try FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        .filter {
+            $0.pathExtension.lowercased() == "xcodeproj"
+                && $0.deletingPathExtension().lastPathComponent.lowercased() != "pods"
+        }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        if let project = projects.first(where: {
+            $0.deletingPathExtension().lastPathComponent == workspaceURL.deletingPathExtension().lastPathComponent
+        }) {
+            return project
+        }
+        if projects.count == 1 { return projects[0] }
+        throw PackageError.invalidInput("无法确定主项目的 .xcodeproj，请选择只包含一个主工程的项目文件夹。")
     }
 
     private static func findXcodeContainer(in directoryURL: URL) throws -> URL {
