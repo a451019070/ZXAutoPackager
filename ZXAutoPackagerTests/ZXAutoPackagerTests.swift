@@ -65,6 +65,40 @@ struct ZXAutoPackagerTests {
         #expect(XcodePackager.findArchivedApp(in: root)?.standardizedFileURL == app.standardizedFileURL)
     }
 
+    @Test func feishuWebhookRejectsUntrustedHosts() {
+        #expect(FeishuNotifier.validWebhook("https://open.feishu.cn/open-apis/bot/v2/hook/example") != nil)
+        #expect(FeishuNotifier.validWebhook("https://open.feishu.cn.evil.example/open-apis/bot/v2/hook/example") == nil)
+        #expect(FeishuNotifier.validWebhook("http://open.feishu.cn/open-apis/bot/v2/hook/example") == nil)
+    }
+
+    @Test func feishuMessageContainsBuildAndDownloadInformation() {
+        let result = PackageResult(
+            artifactPath: "/tmp/Demo.ipa",
+            fileSize: 1024,
+            versionNumber: "1.2.3",
+            buildNumber: 42,
+            configuration: "Release",
+            log: ""
+        )
+        let notification = FeishuNotification(
+            scheme: "Demo",
+            platform: .iOS,
+            result: result,
+            downloadURL: "https://www.pgyer.com/demo",
+            updateDescription: "修复问题"
+        )
+        let card = FeishuNotifier.messageContent(notification, imageKey: "img_test")
+        let elements = card["elements"] as? [[String: Any]]
+        let text = (elements?.first?["text"] as? [String: String])?["content"] ?? ""
+        #expect(text.contains("Demo.ipa"))
+        #expect(text.contains("1.2.3"))
+        #expect(text.contains("42"))
+        #expect(text.contains("https://www.pgyer.com/demo"))
+        #expect(elements?.contains { $0["tag"] as? String == "img" && $0["img_key"] as? String == "img_test" } == true)
+        let cardWithoutImage = FeishuNotifier.messageContent(notification, imageKey: "")
+        #expect((cardWithoutImage["elements"] as? [[String: Any]])?.count == 1)
+    }
+
     @Test func maximumPgyerBuildNumberReturnsNilWithoutMatchingBuild() {
         let records = [
             PgyerBuildRecord(buildKey: "a", buildVersion: "2.0", buildVersionNo: "3")

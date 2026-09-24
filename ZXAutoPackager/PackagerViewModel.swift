@@ -142,6 +142,15 @@ final class PackagerViewModel: ObservableObject {
         didSet { defaults.set(pgyerAppKey, forKey: Keys.pgyerAppKey) }
     }
     @Published var updateDescription = ""
+    @Published var sendToFeishu = false {
+        didSet { defaults.set(sendToFeishu, forKey: Keys.sendToFeishu) }
+    }
+    @Published var feishuWebhook = "" {
+        didSet { defaults.set(feishuWebhook, forKey: Keys.feishuWebhook) }
+    }
+    @Published var feishuImageKey = "" {
+        didSet { defaults.set(feishuImageKey, forKey: Keys.feishuImageKey) }
+    }
     @Published var useGitBranch = false {
         didSet { defaults.set(useGitBranch, forKey: Keys.useGitBranch) }
     }
@@ -179,6 +188,9 @@ final class PackagerViewModel: ObservableObject {
         static let usePgyerBuildNumber = "ZXAutoPackager.usePgyerBuildNumber"
         static let pgyerAPIKey = "ZXAutoPackager.pgyerAPIKey"
         static let pgyerAppKey = "ZXAutoPackager.pgyerAppKey"
+        static let sendToFeishu = "ZXAutoPackager.sendToFeishu"
+        static let feishuWebhook = "ZXAutoPackager.feishuWebhook"
+        static let feishuImageKey = "ZXAutoPackager.feishuImageKey"
         static let useGitBranch = "ZXAutoPackager.useGitBranch"
         static let selectedBranch = "ZXAutoPackager.selectedBranch"
         static let installPods = "ZXAutoPackager.installPods"
@@ -214,6 +226,11 @@ final class PackagerViewModel: ObservableObject {
         defaults.set(false, forKey: Keys.usePgyerBuildNumber)
         pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
         pgyerAppKey = defaults.string(forKey: Keys.pgyerAppKey) ?? ""
+        sendToFeishu = defaults.bool(forKey: Keys.sendToFeishu)
+        feishuWebhook = defaults.string(forKey: Keys.feishuWebhook) ?? ""
+        feishuImageKey = defaults.string(forKey: Keys.feishuImageKey) ?? ""
+        defaults.removeObject(forKey: "ZXAutoPackager.feishuAppID")
+        defaults.removeObject(forKey: "ZXAutoPackager.feishuAppSecret")
         defaults.removeObject(forKey: "ZXAutoPackager.updateDescription")
         useGitBranch = defaults.bool(forKey: Keys.useGitBranch)
         selectedBranch = defaults.string(forKey: Keys.selectedBranch) ?? ""
@@ -246,7 +263,8 @@ final class PackagerViewModel: ObservableObject {
         !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (!(uploadToPgyer || usePgyerBuildNumber) || hasPgyerAPIKey) &&
         (!usePgyerBuildNumber || hasPgyerAppKey) &&
-        (!useGitBranch || !selectedBranch.isEmpty)
+        (!useGitBranch || !selectedBranch.isEmpty) &&
+        (!sendToFeishu || FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) != nil)
     }
 
     var configurationHint: String {
@@ -266,6 +284,7 @@ final class PackagerViewModel: ObservableObject {
         if useGitBranch && selectedBranch.isEmpty { return "请在高级选项中选择远程分支" }
         if (uploadToPgyer || usePgyerBuildNumber) && !hasPgyerAPIKey { return "请填写蒲公英 API Key" }
         if usePgyerBuildNumber && !hasPgyerAppKey { return "请填写蒲公英 App Key" }
+        if sendToFeishu && FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) == nil { return "请填写有效的飞书机器人 Webhook" }
         if isLoadingPgyerBuildNumber { return "正在查询蒲公英 Build 号…" }
         return "配置已就绪，可以开始打包"
     }
@@ -493,6 +512,9 @@ final class PackagerViewModel: ObservableObject {
         let apiKey = pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let appKey = pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let updateDescription = updateDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldSendToFeishu = sendToFeishu
+        let webhook = feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imageKey = feishuImageKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
         isPackaging = true
         elapsedSeconds = 0
@@ -626,6 +648,29 @@ final class PackagerViewModel: ObservableObject {
                     }
                 }
 
+                var notificationError: String?
+                if shouldSendToFeishu {
+                    logBuffer.append("\n===== 飞书通知 =====\n")
+                    do {
+                        try await FeishuNotifier.send(
+                            FeishuNotification(
+                                scheme: scheme,
+                                platform: platform,
+                                result: packageResult,
+                                downloadURL: uploadResult?.downloadURL,
+                                updateDescription: updateDescription
+                            ),
+                            webhook: webhook,
+                            imageKey: imageKey
+                        ) { chunk in
+                            logBuffer.append(chunk)
+                        }
+                    } catch {
+                        notificationError = error.localizedDescription
+                        logBuffer.append("飞书通知失败：\(error.localizedDescription)\n")
+                    }
+                }
+
                 await MainActor.run {
                     self.finishLogRefresh(from: logBuffer)
                     self.stopElapsedTimer()
@@ -650,6 +695,11 @@ final class PackagerViewModel: ObservableObject {
                         self.showPgyerQRCode()
                     } else {
                         self.statusMessage = "打包成功：\(URL(fileURLWithPath: packageResult.artifactPath).lastPathComponent)"
+                    }
+                    if let notificationError {
+                        self.statusMessage += "；飞书通知失败：\(notificationError)"
+                    } else if shouldSendToFeishu {
+                        self.statusMessage += "；飞书通知已发送"
                     }
                     self.defaults.set(build, forKey: Keys.lastSuccessfulBuild)
                     self.buildNumber = String(build + 1)

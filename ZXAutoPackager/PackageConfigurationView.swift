@@ -126,6 +126,35 @@ struct PackageConfigurationView: View {
                             .textFieldStyle(.roundedBorder)
                     }
                 }
+
+                GridRow {
+                    fieldTitle("飞书")
+                    Toggle("打包后发送飞书通知", isOn: $viewModel.sendToFeishu)
+                        .toggleStyle(.switch)
+                }
+                if viewModel.sendToFeishu {
+                    GridRow {
+                        fieldTitle("Webhook")
+                        SecureField("飞书群自定义机器人 Webhook 地址", text: $viewModel.feishuWebhook)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        fieldTitle("图片 imageKey")
+                        HStack {
+                            TextField("可选，填写已上传至飞书的图片 imageKey", text: $viewModel.feishuImageKey)
+                                .textFieldStyle(.roundedBorder)
+                            if viewModel.feishuImageKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Link("点击获取 imageKey", destination: URL(string: "https://open.larkoffice.com/cardkit")!)
+                            }
+                        }
+                    }
+                    GridRow {
+                        Text("")
+                        Text("卡片使用已有 imageKey 显示图片；不会自动上传本次下载地址的二维码。下载地址来自蒲公英。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .padding(8)
         } label: {
