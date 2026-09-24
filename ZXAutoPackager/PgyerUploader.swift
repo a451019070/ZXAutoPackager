@@ -13,6 +13,12 @@ struct PgyerUploadResult: Sendable {
     let downloadURL: String
 }
 
+struct PgyerBuildRecord: Decodable, Sendable {
+    let buildKey: String?
+    let buildVersion: String?
+    let buildVersionNo: String?
+}
+
 enum PgyerUploadError: LocalizedError {
     case invalidResponse(String)
     case apiError(Int, String)
@@ -32,6 +38,85 @@ enum PgyerUploadError: LocalizedError {
 nonisolated enum PgyerUploader {
     private static let apiBaseURL = URL(string: "https://api.pgyer.com/apiv2")!
     private static let webBaseURL = "https://www.pgyer.com/"
+
+    static func nextBuildNumber(
+        apiKey: String,
+        appKey: String,
+        version: String,
+        onOutput: @escaping @Sendable (String) -> Void
+    ) async throws -> Int {
+        var page = 1
+        var pageCount = 1
+        var records: [PgyerBuildRecord] = []
+        var seenBuildKeys = Set<String>()
+
+        onOutput("\n===== 查询蒲公英 Build 号 =====\n")
+        repeat {
+            try Task.checkCancellation()
+            onOutput("正在读取历史版本第 \(page) 页…\n")
+            let response = try await getBuildsPage(apiKey: apiKey, appKey: appKey, page: page)
+            pageCount = max(response.pageCount, 1)
+            for record in response.list {
+                if let buildKey = record.buildKey, !buildKey.isEmpty {
+                    guard seenBuildKeys.insert(buildKey).inserted else { continue }
+                }
+                records.append(record)
+            }
+            page += 1
+        } while page <= pageCount
+
+        let maximum = maximumBuildNumber(in: records, matching: version)
+        let next = (maximum ?? 0) + 1
+        if let maximum {
+            onOutput("蒲公英当前版本 \(version) 最大 Build：\(maximum)，本次使用：\(next)\n")
+        } else {
+            onOutput("蒲公英尚无版本 \(version) 的历史包，本次使用 Build 1\n")
+        }
+        return next
+    }
+
+    static func maximumBuildNumber(
+        in records: [PgyerBuildRecord],
+        matching version: String
+    ) -> Int? {
+        records
+            .filter { $0.buildVersion == version }
+            .compactMap { record in
+                guard let value = record.buildVersionNo,
+                      let number = Int(value),
+                      number > 0 else { return nil }
+                return number
+            }
+            .max()
+    }
+
+    private struct BuildsPage: Sendable {
+        let pageCount: Int
+        let list: [PgyerBuildRecord]
+    }
+
+    private static func getBuildsPage(
+        apiKey: String,
+        appKey: String,
+        page: Int
+    ) async throws -> BuildsPage {
+        let url = apiBaseURL.appendingPathComponent("app/builds")
+        let responseData = try await postForm(url: url, fields: [
+            "_api_key": apiKey,
+            "appKey": appKey,
+            "page": String(page)
+        ])
+        let response: BuildListAPIResponse
+        do {
+            response = try JSONDecoder().decode(BuildListAPIResponse.self, from: responseData)
+        } catch {
+            throw PgyerUploadError.invalidResponse(String(decoding: responseData, as: UTF8.self))
+        }
+        guard response.code == 0, let data = response.data else {
+            throw PgyerUploadError.apiError(response.code, response.message ?? "无法获取历史版本")
+        }
+        return BuildsPage(pageCount: data.pageCount, list: data.list)
+    }
 
     static func upload(
         _ request: PgyerUploadRequest,
@@ -203,6 +288,18 @@ nonisolated enum PgyerUploader {
             let raw = String(decoding: data, as: UTF8.self)
             throw PgyerUploadError.invalidResponse(raw)
         }
+    }
+
+    private struct BuildListAPIResponse: Decodable {
+        let code: Int
+        let message: String?
+        let data: BuildListData?
+    }
+
+    private struct BuildListData: Decodable {
+        let pageCount: Int
+        let currentPage: Int
+        let list: [PgyerBuildRecord]
     }
 
     private struct APIResponse: Decodable {

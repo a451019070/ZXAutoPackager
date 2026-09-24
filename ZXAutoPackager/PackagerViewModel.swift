@@ -113,8 +113,14 @@ final class PackagerViewModel: ObservableObject {
     @Published var uploadToPgyer = false {
         didSet { defaults.set(uploadToPgyer, forKey: Keys.uploadToPgyer) }
     }
+    @Published var usePgyerBuildNumber = false {
+        didSet { defaults.set(usePgyerBuildNumber, forKey: Keys.usePgyerBuildNumber) }
+    }
     @Published var pgyerAPIKey = "" {
         didSet { defaults.set(pgyerAPIKey, forKey: Keys.pgyerAPIKey) }
+    }
+    @Published var pgyerAppKey = "" {
+        didSet { defaults.set(pgyerAppKey, forKey: Keys.pgyerAppKey) }
     }
     @Published var updateDescription = "" {
         didSet { defaults.set(updateDescription, forKey: Keys.updateDescription) }
@@ -130,6 +136,7 @@ final class PackagerViewModel: ObservableObject {
     }
     @Published var remoteBranches: [String] = []
     @Published var isLoadingBranches = false
+    @Published var isLoadingPgyerBuildNumber = false
     @Published var isPackaging = false
     @Published var elapsedSeconds = 0
     @Published var statusMessage = "请选择工程和导出目录"
@@ -149,7 +156,9 @@ final class PackagerViewModel: ObservableObject {
         static let projectBookmark = "ZXAutoPackager.projectBookmark"
         static let outputBookmark = "ZXAutoPackager.outputBookmark"
         static let uploadToPgyer = "ZXAutoPackager.uploadToPgyer"
+        static let usePgyerBuildNumber = "ZXAutoPackager.usePgyerBuildNumber"
         static let pgyerAPIKey = "ZXAutoPackager.pgyerAPIKey"
+        static let pgyerAppKey = "ZXAutoPackager.pgyerAppKey"
         static let updateDescription = "ZXAutoPackager.updateDescription"
         static let useGitBranch = "ZXAutoPackager.useGitBranch"
         static let selectedBranch = "ZXAutoPackager.selectedBranch"
@@ -180,7 +189,9 @@ final class PackagerViewModel: ObservableObject {
         versionNumber = defaults.string(forKey: Keys.versionNumber) ?? "1.0"
         outputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
         uploadToPgyer = defaults.bool(forKey: Keys.uploadToPgyer)
+        usePgyerBuildNumber = defaults.bool(forKey: Keys.usePgyerBuildNumber)
         pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
+        pgyerAppKey = defaults.string(forKey: Keys.pgyerAppKey) ?? ""
         updateDescription = defaults.string(forKey: Keys.updateDescription) ?? ""
         useGitBranch = defaults.bool(forKey: Keys.useGitBranch)
         selectedBranch = defaults.string(forKey: Keys.selectedBranch) ?? ""
@@ -202,13 +213,23 @@ final class PackagerViewModel: ObservableObject {
 
     var canPackage: Bool {
         !isPackaging &&
+        !isLoadingPgyerBuildNumber &&
         !containerPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         isValidVersionNumber &&
-        Int(buildNumber).map { $0 > 0 } == true &&
+        (usePgyerBuildNumber || Int(buildNumber).map { $0 > 0 } == true) &&
         !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        (!uploadToPgyer || !pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) &&
+        (!(uploadToPgyer || usePgyerBuildNumber) || hasPgyerAPIKey) &&
+        (!usePgyerBuildNumber || hasPgyerAppKey) &&
         (!useGitBranch || !selectedBranch.isEmpty)
+    }
+
+    var canFetchPgyerBuildNumber: Bool {
+        !isPackaging &&
+        !isLoadingPgyerBuildNumber &&
+        isValidVersionNumber &&
+        hasPgyerAPIKey &&
+        hasPgyerAppKey
     }
 
     var elapsedTimeText: String {
@@ -221,6 +242,51 @@ final class PackagerViewModel: ObservableObject {
         let value = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return false }
         return value.range(of: #"^\d+(\.\d+)*$"#, options: .regularExpression) != nil
+    }
+
+    private var hasPgyerAPIKey: Bool {
+        !pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasPgyerAppKey: Bool {
+        !pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func fetchNextBuildNumberFromPgyer() {
+        guard isValidVersionNumber else {
+            statusMessage = "版本号格式不正确，例如：1.0 或 1.2.3"
+            return
+        }
+        guard hasPgyerAPIKey, hasPgyerAppKey else {
+            statusMessage = "请填写蒲公英 API Key 和 App Key"
+            return
+        }
+        guard !isPackaging, !isLoadingPgyerBuildNumber else { return }
+
+        isLoadingPgyerBuildNumber = true
+        statusMessage = "正在查询蒲公英历史版本…"
+        let apiKey = pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let appKey = pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let version = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        Task {
+            do {
+                let nextBuild = try await PgyerUploader.nextBuildNumber(
+                    apiKey: apiKey,
+                    appKey: appKey,
+                    version: version
+                ) { _ in }
+                self.buildNumber = String(nextBuild)
+                self.isLoadingPgyerBuildNumber = false
+                self.statusMessage = "蒲公英版本 \(version) 的下一 Build 号：\(nextBuild)"
+            } catch is CancellationError {
+                self.isLoadingPgyerBuildNumber = false
+                self.statusMessage = "已取消查询蒲公英 Build 号"
+            } catch {
+                self.isLoadingPgyerBuildNumber = false
+                self.statusMessage = "蒲公英 Build 号查询失败：\(error.localizedDescription)"
+            }
+        }
     }
 
     func refreshBranches(fetchRemote: Bool = true) {
@@ -296,12 +362,50 @@ final class PackagerViewModel: ObservableObject {
             statusMessage = "版本号格式不正确，例如：1.0 或 1.2.3"
             return
         }
+
+        if usePgyerBuildNumber {
+            guard canFetchPgyerBuildNumber else {
+                statusMessage = "请填写蒲公英 API Key 和 App Key"
+                return
+            }
+
+            isLoadingPgyerBuildNumber = true
+            statusMessage = "正在从蒲公英获取下一 Build 号…"
+            let apiKey = pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            let appKey = pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            let version = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            Task {
+                do {
+                    let build = try await PgyerUploader.nextBuildNumber(
+                        apiKey: apiKey,
+                        appKey: appKey,
+                        version: version
+                    ) { _ in }
+                    self.buildNumber = String(build)
+                    self.isLoadingPgyerBuildNumber = false
+                    self.startPackaging(build: build)
+                } catch is CancellationError {
+                    self.isLoadingPgyerBuildNumber = false
+                    self.statusMessage = "已取消查询蒲公英 Build 号"
+                } catch {
+                    self.isLoadingPgyerBuildNumber = false
+                    self.statusMessage = "蒲公英 Build 号查询失败：\(error.localizedDescription)"
+                }
+            }
+            return
+        }
+
         guard let build = Int(buildNumber), build > 0 else {
             statusMessage = "Build 号必须是大于 0 的整数"
             return
         }
+        startPackaging(build: build)
+    }
+
+    private func startPackaging(build: Int) {
         guard canPackage else {
-            statusMessage = "请完整填写工程、Scheme、Build 号和导出目录"
+            statusMessage = "请完整填写工程、Scheme、Build 号、导出目录及所需的蒲公英配置"
             return
         }
 
