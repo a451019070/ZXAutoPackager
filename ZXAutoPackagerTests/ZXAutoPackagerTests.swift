@@ -52,6 +52,72 @@ struct ZXAutoPackagerTests {
         }
     }
 
+    @Test func manualSigningChangesOnlyAppTargetConfiguration() throws {
+        let source = try Data(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ZXAutoPackager.xcodeproj/project.pbxproj"))
+        let profile = ManualSigningProfile(uuid: UUID().uuidString, name: "Demo", teamID: "TEAM",
+            appIdentifier: "TEAM.com.example.app", expiration: .distantFuture,
+            exportMethod: "debugging", certificateHash: "ABC123")
+        let changed = try XcodePackager.manuallySignedProject(
+            source, targetName: "ZXAutoPackager", configuration: "Debug", profile: profile
+        )
+        let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+        let projectURL = temporaryRoot.appendingPathComponent("Demo.xcodeproj", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+        try changed.write(to: projectURL.appendingPathComponent("project.pbxproj"))
+        let schemes = try XcodePackager.listSchemes(containerPath: temporaryRoot.path)
+        #expect(schemes.contains("ZXAutoPackager"))
+        let original = try PropertyListSerialization.propertyList(from: source, format: nil) as! [String: Any]
+        let edited = try PropertyListSerialization.propertyList(from: changed, format: nil) as! [String: Any]
+        let originalObjects = original["objects"] as! [String: [String: Any]]
+        let editedObjects = edited["objects"] as! [String: [String: Any]]
+        let changedIDs = editedObjects.keys.filter { id in
+            let old = originalObjects[id] as NSDictionary?
+            return old?.isEqual(to: editedObjects[id] ?? [:]) == false
+        }
+        #expect(changedIDs.count == 1)
+        let buildSettings = editedObjects[changedIDs[0]]?["buildSettings"] as? [String: Any]
+        #expect(buildSettings?["PROVISIONING_PROFILE_SPECIFIER"] as? String == profile.uuid)
+        #expect(buildSettings?["CODE_SIGN_STYLE"] as? String == "Manual")
+        #expect(buildSettings?["DEVELOPMENT_TEAM"] as? String == "TEAM")
+    }
+
+    @Test func reportsActualArchivedSigningMismatch() throws {
+        let profile = ManualSigningProfile(uuid: UUID().uuidString, name: "Selected", teamID: "TEAM1",
+            appIdentifier: "TEAM1.com.example.app", expiration: .distantFuture,
+            exportMethod: "debugging", certificateHash: "")
+        try XcodePackager.validateArchivedSigning(
+            selected: profile, archivedTeamID: "TEAM1", archivedProfileName: "Selected",
+            archivedProfileUUID: profile.uuid.lowercased()
+        )
+        do {
+            try XcodePackager.validateArchivedSigning(
+                selected: profile, archivedTeamID: "TEAM2", archivedProfileName: "Archived",
+                archivedProfileUUID: UUID().uuidString
+            )
+            Issue.record("应报告 Team 不一致")
+        } catch {
+            #expect(error.localizedDescription.contains("归档 Team"))
+            #expect(error.localizedDescription.contains("Selected"))
+            #expect(error.localizedDescription.contains("Archived"))
+            #expect(error.localizedDescription.contains("TEAM1"))
+            #expect(error.localizedDescription.contains("TEAM2"))
+        }
+        do {
+            try XcodePackager.validateArchivedSigning(
+                selected: profile, archivedTeamID: "TEAM1", archivedProfileName: "Archived",
+                archivedProfileUUID: "OTHER-UUID"
+            )
+            Issue.record("应报告描述文件不一致")
+        } catch {
+            #expect(error.localizedDescription.contains("归档描述文件"))
+            #expect(error.localizedDescription.contains(profile.uuid))
+            #expect(error.localizedDescription.contains("OTHER-UUID"))
+        }
+    }
+
     @Test func manualSigningMatchesExactAndWildcardAppIDs() {
         let exact = ManualSigningProfile(uuid: UUID().uuidString, name: "Demo", teamID: "TEAM",
             appIdentifier: "TEAM.com.example.app", expiration: .distantFuture,
@@ -63,6 +129,9 @@ struct ZXAutoPackagerTests {
         #expect(!exact.matches(bundleID: "com.example.other"))
         #expect(wildcard.matches(bundleID: "com.example.app"))
         #expect(!wildcard.matches(bundleID: "com.other.app"))
+        #expect(ManualSigningProfile.eligibleProfiles(from: [wildcard, exact], bundleID: "com.example.app").count == 2)
+        #expect(ManualSigningProfile.eligibleProfiles(from: [wildcard, exact], bundleID: "com.other.app").isEmpty)
+        #expect(ManualSigningProfile.eligibleProfiles(from: [wildcard, exact], bundleID: nil).isEmpty)
     }
 
     @Test func parsesProjectAndWorkspaceSchemes() throws {

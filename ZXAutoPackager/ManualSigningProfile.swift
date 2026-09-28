@@ -11,10 +11,30 @@ nonisolated struct ManualSigningProfile: Sendable {
     let exportMethod: String
     let certificateHash: String
 
+    static var profileDirectories: [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            home.appendingPathComponent("Library/Developer/Xcode/UserData/Provisioning Profiles", isDirectory: true),
+            home.appendingPathComponent("Library/MobileDevice/Provisioning Profiles", isDirectory: true)
+        ]
+    }
+
     static func installedURL(for uuid: String) -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Developer/Xcode/UserData/Provisioning Profiles", isDirectory: true)
-            .appendingPathComponent("\(uuid).mobileprovision")
+        profileDirectories[0].appendingPathComponent("\(uuid).mobileprovision")
+    }
+
+    static func installedProfiles() throws -> [Self] {
+        var profiles: [String: Self] = [:]
+        for directory in profileDirectories {
+            guard FileManager.default.fileExists(atPath: directory.path) else { continue }
+            let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension.lowercased() == "mobileprovision" }
+            for file in files {
+                guard let data = try? Data(contentsOf: file), let profile = try? read(data) else { continue }
+                profiles[profile.uuid.lowercased()] = profile
+            }
+        }
+        return Array(profiles.values)
     }
 
     static func read(_ data: Data) throws -> Self {
@@ -62,13 +82,20 @@ nonisolated struct ManualSigningProfile: Sendable {
 
     static func load(uuid: String) throws -> Self {
         guard UUID(uuidString: uuid) != nil else { throw PackageError.invalidInput("保存的描述文件 UUID 无效。") }
-        let url = installedURL(for: uuid)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw PackageError.invalidInput("所选描述文件已不存在，请在高级选项重新选择。")
+        for directory in profileDirectories {
+            let directURL = directory.appendingPathComponent("\(uuid).mobileprovision")
+            if let data = try? Data(contentsOf: directURL) {
+                let profile = try read(data)
+                guard profile.uuid.caseInsensitiveCompare(uuid) == .orderedSame else {
+                    throw PackageError.invalidInput("已安装描述文件与保存的 UUID 不一致。")
+                }
+                return profile
+            }
         }
-        let profile = try read(Data(contentsOf: url))
-        guard profile.uuid.caseInsensitiveCompare(uuid) == .orderedSame else {
-            throw PackageError.invalidInput("已安装描述文件与保存的 UUID 不一致。")
+        guard let profile = try installedProfiles().first(where: {
+            $0.uuid.caseInsensitiveCompare(uuid) == .orderedSame
+        }) else {
+            throw PackageError.invalidInput("所选描述文件已不存在或不可用，请在高级选项重新选择。")
         }
         return profile
     }
@@ -80,6 +107,12 @@ nonisolated struct ManualSigningProfile: Sendable {
         guard Self.hasIdentity(sha1: certificateHash) else {
             throw PackageError.invalidInput("钥匙串中找不到所选描述文件匹配的证书及私钥。")
         }
+    }
+
+    static func eligibleProfiles(from profiles: [Self], bundleID: String?) -> [Self] {
+        guard let bundleID else { return [] }
+        return profiles.filter { $0.matches(bundleID: bundleID) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     func matches(bundleID: String) -> Bool {

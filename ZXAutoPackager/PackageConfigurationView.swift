@@ -113,6 +113,15 @@ struct PackageConfigurationView: View {
         .sheet(isPresented: $showAdvancedOptions) {
             advancedSettings
         }
+        .onChange(of: viewModel.containerPath) { _, _ in
+            if showSigningSettings { viewModel.refreshSigningProfiles() }
+        }
+        .onChange(of: viewModel.scheme) { _, _ in
+            if showSigningSettings { viewModel.refreshSigningProfiles() }
+        }
+        .onChange(of: viewModel.configuration) { _, _ in
+            if showSigningSettings { viewModel.refreshSigningProfiles() }
+        }
     }
 
     private var schemeControls: some View {
@@ -203,6 +212,19 @@ struct PackageConfigurationView: View {
         if feishuNeedsSetup { return "待配置" }
         if viewModel.sendToFeishu { return "已启用 · 已配置" }
         return FeishuNotifier.validWebhook(viewModel.feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) == nil ? "未配置" : "已配置"
+    }
+
+    private var signingProfileSelection: Binding<String> {
+        Binding(
+            get: { viewModel.signingProfileUUID ?? "" },
+            set: { uuid in
+                if uuid.isEmpty {
+                    viewModel.clearSigningProfile()
+                } else if let profile = viewModel.installedSigningProfiles.first(where: { $0.uuid == uuid }) {
+                    viewModel.selectSigningProfile(profile)
+                }
+            }
+        )
     }
 
     private var advancedSettings: some View {
@@ -346,6 +368,7 @@ struct PackageConfigurationView: View {
                         Spacer()
                         Button(showSigningSettings ? "收起" : "配置…") {
                             showSigningSettings.toggle()
+                            if showSigningSettings { viewModel.refreshSigningProfiles() }
                         }
                         .disabled(viewModel.isPackaging)
                     }
@@ -353,26 +376,44 @@ struct PackageConfigurationView: View {
                 if showSigningSettings {
                     GridRow {
                         fieldTitle("描述文件")
-                        HStack {
-                            Text(viewModel.provisioningProfileName ?? (viewModel.signingProfileUUID == nil ? "未指定" : "所选文件失效，请更换"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            Spacer()
-                            Button(viewModel.signingProfileUUID == nil ? "选择…" : "更换…") {
-                                viewModel.importProvisioningProfile()
+                        HStack(spacing: 8) {
+                            Picker("描述文件", selection: signingProfileSelection) {
+                                Text("使用工程原有签名").tag("")
+                                if let selectedUUID = viewModel.signingProfileUUID,
+                                   !viewModel.installedSigningProfiles.contains(where: { $0.uuid == selectedUUID }) {
+                                    Text(viewModel.provisioningProfileName ?? "所选文件失效，请重新选择")
+                                        .tag(selectedUUID)
+                                }
+                                ForEach(viewModel.installedSigningProfiles, id: \.uuid) { profile in
+                                    Text("\(profile.name) · \(profile.exportMethod) · 到期 \(profile.expiration.formatted(date: .abbreviated, time: .omitted))")
+                                        .tag(profile.uuid)
+                                }
                             }
-                            .disabled(viewModel.isPackaging)
-                            if viewModel.signingProfileUUID != nil {
-                                Button("清除") { viewModel.clearSigningProfile() }
-                                    .disabled(viewModel.isPackaging)
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity)
+                            .disabled(viewModel.isPackaging || viewModel.isLoadingSigningProfiles)
+                            Button(viewModel.isLoadingSigningProfiles ? "读取中…" : "刷新") {
+                                viewModel.refreshSigningProfiles()
                             }
+                            .disabled(viewModel.isPackaging || viewModel.isLoadingSigningProfiles)
                         }
                     }
                     GridRow {
                         fieldTitle("")
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("使用钥匙串中与描述文件匹配的证书和私钥。所选描述文件会保存供后续 iOS 打包使用，临时覆盖工程自动签名，不修改工程；目前仅支持不含 Extension 的单 App。")
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let message = viewModel.signingProfilesMessage {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if viewModel.installedSigningProfiles.isEmpty && !viewModel.isLoadingSigningProfiles && viewModel.signingProfileBundleID != nil {
+                                Text("没有找到与当前工程匹配的可用描述文件（需未过期且钥匙串中有匹配私钥）。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Button("从文件导入…") { viewModel.importProvisioningProfile() }
+                                .disabled(viewModel.isPackaging || viewModel.signingProfileBundleID == nil || viewModel.isLoadingSigningProfiles)
+                            Text("使用钥匙串中与描述文件匹配的证书和私钥。选择后持续用于 iOS 手动签名，不修改工程；目前仅支持不含 Extension 的单 App。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             if let message = viewModel.signingImportMessage {

@@ -187,27 +187,34 @@ nonisolated enum XcodePackager {
             throw PackageError.invalidInput("所选项目文件夹不存在。")
         }
 
-        let containerURL = try findXcodeContainer(in: projectDirectoryURL)
+        let originalContainerURL = try findXcodeContainer(in: projectDirectoryURL)
+        let manualProfile = try request.platform == .iOS ? request.signingProfileUUID.map(ManualSigningProfile.load) : nil
+        let temporaryRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("ZXAutoPackager-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: temporaryRoot) }
+
+        var buildDirectoryURL = projectDirectoryURL
+        if manualProfile != nil && !request.isTemporaryProject {
+            guard !cancellation.isCancelled else { throw PackageError.cancelled }
+            buildDirectoryURL = temporaryRoot.appendingPathComponent("Project", isDirectory: true)
+            try fileManager.copyItem(at: projectDirectoryURL, to: buildDirectoryURL)
+            guard !cancellation.isCancelled else { throw PackageError.cancelled }
+        }
+        let containerURL = manualProfile == nil ? originalContainerURL : try findXcodeContainer(in: buildDirectoryURL)
         let containerArguments = try arguments(for: containerURL)
-        let manualProfile: ManualSigningProfile?
-        if request.platform == .iOS, let uuid = request.signingProfileUUID {
-            manualProfile = try ManualSigningProfile.load(uuid: uuid)
-            let bundleID = try applicationBundleID(
-                containerArguments: containerArguments, request: request, cancellation: cancellation
+        if let manualProfile {
+            try configureManualSigning(
+                containerArguments: containerArguments, scheme: request.scheme,
+                configuration: request.configuration, profile: manualProfile,
+                buildRoot: buildDirectoryURL, cancellation: cancellation
             )
-            try manualProfile?.validate(bundleID: bundleID)
-        } else {
-            manualProfile = nil
         }
         try fileManager.createDirectory(at: outputURL, withIntermediateDirectories: true)
 
-        let temporaryRoot = fileManager.temporaryDirectory
-            .appendingPathComponent("ZXAutoPackager-\(UUID().uuidString)", isDirectory: true)
         let archiveURL = temporaryRoot.appendingPathComponent("App.xcarchive", isDirectory: true)
         let exportURL = temporaryRoot.appendingPathComponent("Export", isDirectory: true)
         let exportOptionsURL = temporaryRoot.appendingPathComponent("ExportOptions.plist")
-        try fileManager.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: temporaryRoot) }
 
         let safeScheme = safeFileName(request.scheme)
         let safeVersion = safeFileName(request.versionNumber)
@@ -225,10 +232,6 @@ nonisolated enum XcodePackager {
 
         onOutput("===== 开始归档 =====\n正在归档 \(request.scheme)（\(request.configuration)）…\n")
         try writeLog("===== 开始归档 =====\n", to: buildLogHandle)
-        let signingArguments: [String] = manualProfile.map { profile in
-            ["CODE_SIGN_STYLE=Manual", "DEVELOPMENT_TEAM=\(profile.teamID)",
-             "PROVISIONING_PROFILE=\(profile.uuid)", "CODE_SIGN_IDENTITY=\(profile.certificateHash)"]
-        } ?? []
         let archiveResult = try runXcodebuild(
             containerArguments + [
                 "-scheme", request.scheme,
@@ -237,8 +240,9 @@ nonisolated enum XcodePackager {
                 "-archivePath", archiveURL.path,
                 "MARKETING_VERSION=\(request.versionNumber)",
                 "CURRENT_PROJECT_VERSION=\(request.buildNumber)",
-                "DEBUG_INFORMATION_FORMAT=dwarf-with-dsym"
-            ] + signingArguments + ["clean", "archive"],
+                "DEBUG_INFORMATION_FORMAT=dwarf-with-dsym",
+                "clean", "archive"
+            ],
             cancellation: cancellation,
             onOutput: { chunk in
                 try? writeLog(chunk, to: buildLogHandle)
@@ -257,10 +261,12 @@ nonisolated enum XcodePackager {
             let signingInfo = try signingInfo(from: archiveURL)
             if let manualProfile {
                 try manualProfile.validate(bundleID: signingInfo.bundleIdentifier)
-                guard signingInfo.teamIdentifier == manualProfile.teamID,
-                      signingInfo.profileUUID.caseInsensitiveCompare(manualProfile.uuid) == .orderedSame else {
-                    throw PackageError.invalidInput("归档使用的 Team 或描述文件与所选手动签名配置不一致。")
-                }
+                try validateArchivedSigning(
+                    selected: manualProfile,
+                    archivedTeamID: signingInfo.teamIdentifier,
+                    archivedProfileName: signingInfo.profileName,
+                    archivedProfileUUID: signingInfo.profileUUID
+                )
             }
             try makeExportOptionsPlist(at: exportOptionsURL, signingInfo: signingInfo, manualProfile: manualProfile)
             onOutput("===== 开始导出 IPA =====\n")
@@ -328,12 +334,104 @@ nonisolated enum XcodePackager {
         )
     }
 
+    private static func configureManualSigning(
+        containerArguments: [String], scheme: String, configuration: String,
+        profile: ManualSigningProfile, buildRoot: URL,
+        cancellation: BuildCancellationController
+    ) throws {
+        let result = try runXcodebuild(
+            containerArguments + ["-scheme", scheme, "-configuration", configuration,
+                                  "-destination", PackagePlatform.iOS.destination, "-showBuildSettings", "-json"],
+            cancellation: cancellation, onOutput: { _ in }
+        )
+        guard !cancellation.isCancelled else { throw PackageError.cancelled }
+        guard result.status == 0 else { throw PackageError.commandFailed(result.status, result.output) }
+        let bundleID = try manualSigningBundleID(from: result.output)
+        try profile.validate(bundleID: bundleID)
+        guard let start = result.output.firstIndex(of: "["),
+              let end = result.output.lastIndex(of: "]"),
+              let entries = try JSONSerialization.jsonObject(with: Data(result.output[start...end].utf8)) as? [[String: Any]],
+              let app = entries.first(where: {
+                  ($0["buildSettings"] as? [String: String])?["PRODUCT_TYPE"] == "com.apple.product-type.application"
+              }),
+              let settings = app["buildSettings"] as? [String: String],
+              let targetName = app["target"] as? String,
+              let projectPath = settings["PROJECT_FILE_PATH"] else {
+            throw PackageError.invalidInput("无法定位 App 目标的 Xcode 工程。")
+        }
+        let projectURL = URL(fileURLWithPath: projectPath, isDirectory: true).standardizedFileURL
+        let resolvedRoot = buildRoot.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedProject = projectURL.resolvingSymlinksInPath().standardizedFileURL
+        let pbxproj = projectURL.appendingPathComponent("project.pbxproj")
+        let resolvedPBXProj = pbxproj.resolvingSymlinksInPath().standardizedFileURL
+        guard projectURL.pathExtension == "xcodeproj",
+              resolvedProject.path.hasPrefix(resolvedRoot.path + "/"),
+              resolvedPBXProj.path.hasPrefix(resolvedRoot.path + "/") else {
+            throw PackageError.invalidInput("App 目标不在临时工程目录中，已停止签名设置修改。")
+        }
+        let changed = try manuallySignedProject(
+            Data(contentsOf: pbxproj), targetName: targetName,
+            configuration: configuration, profile: profile
+        )
+        try changed.write(to: pbxproj, options: .atomic)
+        guard !cancellation.isCancelled else { throw PackageError.cancelled }
+    }
+
+    static func manuallySignedProject(
+        _ data: Data, targetName: String, configuration: String,
+        profile: ManualSigningProfile
+    ) throws -> Data {
+        guard var project = try PropertyListSerialization.propertyList(
+            from: data, options: [], format: nil
+        ) as? [String: Any],
+              var objects = project["objects"] as? [String: [String: Any]] else {
+            throw PackageError.invalidInput("无法解析 App 工程的构建设置。")
+        }
+        let targets = objects.filter { $0.value["isa"] as? String == "PBXNativeTarget" &&
+            $0.value["name"] as? String == targetName &&
+            $0.value["productType"] as? String == "com.apple.product-type.application" }
+        guard targets.count == 1,
+              let configListID = targets.first?.value["buildConfigurationList"] as? String,
+              let configList = objects[configListID],
+              let configIDs = configList["buildConfigurations"] as? [String] else {
+            throw PackageError.invalidInput("无法定位唯一的 App 目标签名设置。")
+        }
+        let matches = configIDs.filter { objects[$0]?["name"] as? String == configuration }
+        guard matches.count == 1, let configID = matches.first,
+              var config = objects[configID] else {
+            throw PackageError.invalidInput("无法定位 App 目标的 \(configuration) 构建配置。")
+        }
+        var settings = config["buildSettings"] as? [String: Any] ?? [:]
+        settings["CODE_SIGN_STYLE"] = "Manual"
+        settings["DEVELOPMENT_TEAM"] = profile.teamID
+        settings["PROVISIONING_PROFILE_SPECIFIER"] = profile.uuid
+        settings["PROVISIONING_PROFILE"] = profile.uuid
+        settings["CODE_SIGN_IDENTITY"] = profile.certificateHash
+        config["buildSettings"] = settings
+        objects[configID] = config
+        project["objects"] = objects
+        return try PropertyListSerialization.data(fromPropertyList: project, format: .xml, options: 0)
+    }
+
+    static func applicationBundleID(
+        containerPath: String, scheme: String, configuration: String,
+        cancellation: BuildCancellationController
+    ) throws -> String {
+        let directory = URL(fileURLWithPath: containerPath, isDirectory: true)
+        let container = try findXcodeContainer(in: directory)
+        return try applicationBundleID(
+            containerArguments: arguments(for: container), scheme: scheme,
+            configuration: configuration, cancellation: cancellation
+        )
+    }
+
     private static func applicationBundleID(
-        containerArguments: [String], request: PackageRequest, cancellation: BuildCancellationController
+        containerArguments: [String], scheme: String, configuration: String,
+        cancellation: BuildCancellationController
     ) throws -> String {
         let result = try runXcodebuild(
-            containerArguments + ["-scheme", request.scheme, "-configuration", request.configuration,
-                                  "-destination", request.platform.destination, "-showBuildSettings", "-json"],
+            containerArguments + ["-scheme", scheme, "-configuration", configuration,
+                                  "-destination", PackagePlatform.iOS.destination, "-showBuildSettings", "-json"],
             cancellation: cancellation, onOutput: { _ in }
         )
         guard !cancellation.isCancelled else { throw PackageError.cancelled }
@@ -433,6 +531,22 @@ nonisolated enum XcodePackager {
         let teamIdentifier: String
         let profileName: String
         let profileUUID: String
+    }
+
+    static func validateArchivedSigning(
+        selected: ManualSigningProfile,
+        archivedTeamID: String,
+        archivedProfileName: String,
+        archivedProfileUUID: String
+    ) throws {
+        let selectedSummary = "所选：\(selected.name)（UUID: \(selected.uuid)），Team: \(selected.teamID)"
+        let archivedSummary = "归档实际：\(archivedProfileName)（UUID: \(archivedProfileUUID)），Team: \(archivedTeamID)"
+        if archivedTeamID != selected.teamID {
+            throw PackageError.invalidInput("归档 Team 与所选描述文件的 Team 不一致。\n\(selectedSummary)\n\(archivedSummary)")
+        }
+        if archivedProfileUUID.caseInsensitiveCompare(selected.uuid) != .orderedSame {
+            throw PackageError.invalidInput("归档描述文件与所选描述文件不一致。\n\(selectedSummary)\n\(archivedSummary)")
+        }
     }
 
     private static func signingInfo(from archiveURL: URL) throws -> SigningInfo {

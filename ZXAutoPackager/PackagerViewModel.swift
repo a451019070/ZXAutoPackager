@@ -56,6 +56,7 @@ struct PackageRequest: Sendable {
     let buildNumber: Int
     let outputDirectory: String
     let signingProfileUUID: String?
+    let isTemporaryProject: Bool
 }
 
 struct PackageResult: Sendable {
@@ -167,6 +168,10 @@ final class PackagerViewModel: ObservableObject {
         didSet { defaults.set(signingProfileUUID, forKey: Keys.signingProfileUUID) }
     }
     @Published var signingImportMessage: String?
+    @Published var installedSigningProfiles: [ManualSigningProfile] = []
+    @Published var signingProfileBundleID: String?
+    @Published var signingProfilesMessage: String?
+    @Published var isLoadingSigningProfiles = false
     @Published var remoteBranches: [String] = []
     @Published var availableSchemes: [String] = []
     @Published var isLoadingSchemes = false
@@ -212,6 +217,7 @@ final class PackagerViewModel: ObservableObject {
     private var packageTask: Task<Void, Never>?
     private var cancellationController: BuildCancellationController?
     private var schemeLookupID = UUID()
+    private var signingLookupID = UUID()
 
     deinit {
         logRefreshTask?.cancel()
@@ -492,6 +498,80 @@ final class PackagerViewModel: ObservableObject {
         statusMessage = "导出目录已选择"
     }
 
+    func refreshSigningProfiles() {
+        guard !isPackaging else { return }
+        let lookupID = UUID()
+        signingLookupID = lookupID
+        let projectPath = containerPath
+        let selectedScheme = scheme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedConfiguration = configuration.rawValue
+        let shouldCheckProject = !projectPath.isEmpty && !selectedScheme.isEmpty
+        let projectAccess = shouldCheckProject ? restoreAccess(
+            bookmarkKey: Keys.projectBookmark,
+            fallbackPath: projectPath,
+            directoryName: "项目目录"
+        ) : nil
+        isLoadingSigningProfiles = true
+        signingProfileBundleID = nil
+        signingProfilesMessage = nil
+        Task.detached(priority: .userInitiated) {
+            defer { projectAccess?.stop() }
+            var profiles: [ManualSigningProfile] = []
+            var bundleID: String?
+            var message: String?
+            do {
+                profiles = try ManualSigningProfile.installedProfiles()
+            } catch {
+                message = "读取 Xcode 描述文件失败：\(error.localizedDescription)"
+            }
+            if shouldCheckProject {
+                if let projectAccess {
+                    do {
+                        bundleID = try XcodePackager.applicationBundleID(
+                            containerPath: projectAccess.url.path, scheme: selectedScheme,
+                            configuration: selectedConfiguration, cancellation: BuildCancellationController()
+                        )
+                    } catch {
+                        message = [message, "无法核对当前工程：\(error.localizedDescription)"].compactMap { $0 }.joined(separator: "；")
+                    }
+                } else {
+                    message = [message, "无法访问项目目录，请重新选择项目文件夹。"].compactMap { $0 }.joined(separator: "；")
+                }
+            } else {
+                message = [message, "选择项目和 Scheme 后可查看匹配的描述文件。"].compactMap { $0 }.joined(separator: "；")
+            }
+            await MainActor.run {
+                guard self.signingLookupID == lookupID,
+                      self.containerPath == projectPath,
+                      self.scheme == selectedScheme,
+                      self.configuration.rawValue == selectedConfiguration else { return }
+                self.installedSigningProfiles = ManualSigningProfile.eligibleProfiles(
+                    from: profiles, bundleID: bundleID
+                )
+                self.signingProfileBundleID = bundleID
+                self.signingProfilesMessage = message
+                self.isLoadingSigningProfiles = false
+            }
+        }
+    }
+
+    func selectSigningProfile(_ profile: ManualSigningProfile) {
+        guard !isPackaging else { return }
+        guard let bundleID = signingProfileBundleID else {
+            signingImportMessage = "请先选择工程和 Scheme，并刷新列表以核对 Bundle ID。"
+            return
+        }
+        do {
+            let installed = try ManualSigningProfile.load(uuid: profile.uuid)
+            try installed.validate(bundleID: bundleID)
+            signingProfileUUID = installed.uuid
+            provisioningProfileName = installed.name
+            signingImportMessage = "已选用 \(installed.name)；后续 iOS 打包将使用手动签名。"
+        } catch {
+            signingImportMessage = error.localizedDescription
+        }
+    }
+
     func clearSigningProfile() {
         signingProfileUUID = nil
         provisioningProfileName = nil
@@ -512,6 +592,10 @@ final class PackagerViewModel: ObservableObject {
         do {
             let data = try Data(contentsOf: url)
             let profile = try ManualSigningProfile.read(data)
+            guard let bundleID = signingProfileBundleID else {
+                throw PackageError.invalidInput("请先选择工程和 Scheme，并刷新列表以核对 Bundle ID。")
+            }
+            try profile.validate(bundleID: bundleID)
             let destination = ManualSigningProfile.installedURL(for: profile.uuid)
             try FileManager.default.createDirectory(
                 at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
@@ -520,6 +604,7 @@ final class PackagerViewModel: ObservableObject {
             provisioningProfileName = profile.name
             signingProfileUUID = profile.uuid
             signingImportMessage = "已选用 \(profile.name)；后续 iOS 打包将使用手动签名。"
+            refreshSigningProfiles()
         } catch {
             signingImportMessage = error.localizedDescription
         }
@@ -670,7 +755,8 @@ final class PackagerViewModel: ObservableObject {
                     versionNumber: resolvedVersion,
                     buildNumber: build,
                     outputDirectory: outputAccess.url.path,
-                    signingProfileUUID: selectedSigningProfileUUID
+                    signingProfileUUID: selectedSigningProfileUUID,
+                    isTemporaryProject: shouldUseGitBranch
                 )
                 let packageResult = try XcodePackager.package(
                     request,
