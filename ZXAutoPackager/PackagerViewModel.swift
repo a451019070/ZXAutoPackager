@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import UniformTypeIdentifiers
 
 private final class BuildLogBuffer: @unchecked Sendable {
     private let lock = NSLock()
@@ -54,6 +55,7 @@ struct PackageRequest: Sendable {
     let versionNumber: String
     let buildNumber: Int
     let outputDirectory: String
+    let signingProfileUUID: String?
 }
 
 struct PackageResult: Sendable {
@@ -160,6 +162,11 @@ final class PackagerViewModel: ObservableObject {
     @Published var installPods = true {
         didSet { defaults.set(installPods, forKey: Keys.installPods) }
     }
+    @Published var provisioningProfileName: String?
+    @Published var signingProfileUUID: String? {
+        didSet { defaults.set(signingProfileUUID, forKey: Keys.signingProfileUUID) }
+    }
+    @Published var signingImportMessage: String?
     @Published var remoteBranches: [String] = []
     @Published var availableSchemes: [String] = []
     @Published var isLoadingSchemes = false
@@ -194,6 +201,7 @@ final class PackagerViewModel: ObservableObject {
         static let useGitBranch = "ZXAutoPackager.useGitBranch"
         static let selectedBranch = "ZXAutoPackager.selectedBranch"
         static let installPods = "ZXAutoPackager.installPods"
+        static let signingProfileUUID = "ZXAutoPackager.signingProfileUUID"
         static let lastSuccessfulBuild = "ZXAutoPackager.lastSuccessfulBuild"
     }
 
@@ -238,6 +246,14 @@ final class PackagerViewModel: ObservableObject {
             : defaults.bool(forKey: Keys.installPods)
 
         buildNumber = defaults.string(forKey: Keys.buildNumber) ?? ""
+        signingProfileUUID = defaults.string(forKey: Keys.signingProfileUUID)
+        if let signingProfileUUID {
+            do {
+                provisioningProfileName = try ManualSigningProfile.load(uuid: signingProfileUUID).name
+            } catch {
+                signingImportMessage = error.localizedDescription
+            }
+        }
 
         if !containerPath.isEmpty || !outputDirectory.isEmpty {
             statusMessage = "已恢复上次填写的打包配置"
@@ -476,6 +492,39 @@ final class PackagerViewModel: ObservableObject {
         statusMessage = "导出目录已选择"
     }
 
+    func clearSigningProfile() {
+        signingProfileUUID = nil
+        provisioningProfileName = nil
+        signingImportMessage = "已清除指定描述文件，恢复工程原有签名方式。"
+    }
+
+    func importProvisioningProfile() {
+        let panel = NSOpenPanel()
+        panel.title = "选择 iOS 描述文件"
+        panel.prompt = "导入描述文件"
+        panel.allowedContentTypes = [UTType(filenameExtension: "mobileprovision") ?? .data]
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            let profile = try ManualSigningProfile.read(data)
+            let destination = ManualSigningProfile.installedURL(for: profile.uuid)
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try data.write(to: destination, options: .atomic)
+            provisioningProfileName = profile.name
+            signingProfileUUID = profile.uuid
+            signingImportMessage = "已选用 \(profile.name)；后续 iOS 打包将使用手动签名。"
+        } catch {
+            signingImportMessage = error.localizedDescription
+        }
+    }
+
     func startPackaging() {
         guard canPackage else {
             statusMessage = configurationHint
@@ -514,6 +563,7 @@ final class PackagerViewModel: ObservableObject {
         let shouldSendToFeishu = sendToFeishu
         let webhook = feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageKey = feishuImageKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedSigningProfileUUID = platform == .iOS ? signingProfileUUID : nil
 
         isPackaging = true
         elapsedSeconds = 0
@@ -619,7 +669,8 @@ final class PackagerViewModel: ObservableObject {
                     configuration: configuration,
                     versionNumber: resolvedVersion,
                     buildNumber: build,
-                    outputDirectory: outputAccess.url.path
+                    outputDirectory: outputAccess.url.path,
+                    signingProfileUUID: selectedSigningProfileUUID
                 )
                 let packageResult = try XcodePackager.package(
                     request,

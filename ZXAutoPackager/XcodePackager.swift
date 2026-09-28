@@ -189,6 +189,16 @@ nonisolated enum XcodePackager {
 
         let containerURL = try findXcodeContainer(in: projectDirectoryURL)
         let containerArguments = try arguments(for: containerURL)
+        let manualProfile: ManualSigningProfile?
+        if request.platform == .iOS, let uuid = request.signingProfileUUID {
+            manualProfile = try ManualSigningProfile.load(uuid: uuid)
+            let bundleID = try applicationBundleID(
+                containerArguments: containerArguments, request: request, cancellation: cancellation
+            )
+            try manualProfile?.validate(bundleID: bundleID)
+        } else {
+            manualProfile = nil
+        }
         try fileManager.createDirectory(at: outputURL, withIntermediateDirectories: true)
 
         let temporaryRoot = fileManager.temporaryDirectory
@@ -215,6 +225,10 @@ nonisolated enum XcodePackager {
 
         onOutput("===== 开始归档 =====\n正在归档 \(request.scheme)（\(request.configuration)）…\n")
         try writeLog("===== 开始归档 =====\n", to: buildLogHandle)
+        let signingArguments: [String] = manualProfile.map { profile in
+            ["CODE_SIGN_STYLE=Manual", "DEVELOPMENT_TEAM=\(profile.teamID)",
+             "PROVISIONING_PROFILE=\(profile.uuid)", "CODE_SIGN_IDENTITY=\(profile.certificateHash)"]
+        } ?? []
         let archiveResult = try runXcodebuild(
             containerArguments + [
                 "-scheme", request.scheme,
@@ -223,9 +237,8 @@ nonisolated enum XcodePackager {
                 "-archivePath", archiveURL.path,
                 "MARKETING_VERSION=\(request.versionNumber)",
                 "CURRENT_PROJECT_VERSION=\(request.buildNumber)",
-                "DEBUG_INFORMATION_FORMAT=dwarf-with-dsym",
-                "clean", "archive"
-            ],
+                "DEBUG_INFORMATION_FORMAT=dwarf-with-dsym"
+            ] + signingArguments + ["clean", "archive"],
             cancellation: cancellation,
             onOutput: { chunk in
                 try? writeLog(chunk, to: buildLogHandle)
@@ -242,7 +255,14 @@ nonisolated enum XcodePackager {
         let combinedLog: String
         if request.platform == .iOS {
             let signingInfo = try signingInfo(from: archiveURL)
-            try makeExportOptionsPlist(at: exportOptionsURL, signingInfo: signingInfo)
+            if let manualProfile {
+                try manualProfile.validate(bundleID: signingInfo.bundleIdentifier)
+                guard signingInfo.teamIdentifier == manualProfile.teamID,
+                      signingInfo.profileUUID.caseInsensitiveCompare(manualProfile.uuid) == .orderedSame else {
+                    throw PackageError.invalidInput("归档使用的 Team 或描述文件与所选手动签名配置不一致。")
+                }
+            }
+            try makeExportOptionsPlist(at: exportOptionsURL, signingInfo: signingInfo, manualProfile: manualProfile)
             onOutput("===== 开始导出 IPA =====\n")
             try writeLog("\n===== 开始导出 IPA =====\n", to: buildLogHandle)
             let exportResult = try runXcodebuild([
@@ -306,6 +326,44 @@ nonisolated enum XcodePackager {
             configuration: request.configuration,
             log: combinedLog
         )
+    }
+
+    private static func applicationBundleID(
+        containerArguments: [String], request: PackageRequest, cancellation: BuildCancellationController
+    ) throws -> String {
+        let result = try runXcodebuild(
+            containerArguments + ["-scheme", request.scheme, "-configuration", request.configuration,
+                                  "-destination", request.platform.destination, "-showBuildSettings", "-json"],
+            cancellation: cancellation, onOutput: { _ in }
+        )
+        guard !cancellation.isCancelled else { throw PackageError.cancelled }
+        guard result.status == 0 else { throw PackageError.commandFailed(result.status, result.output) }
+        return try manualSigningBundleID(from: result.output)
+    }
+
+    static func manualSigningBundleID(from output: String) throws -> String {
+        guard let start = output.firstIndex(of: "["),
+              let end = output.lastIndex(of: "]"),
+              let entries = try JSONSerialization.jsonObject(with: Data(output[start...end].utf8)) as? [[String: Any]] else {
+            throw PackageError.invalidInput("无法读取工程签名构建设置。")
+        }
+        let applications = entries.filter { entry in
+            let settings = entry["buildSettings"] as? [String: String] ?? [:]
+            return settings["PRODUCT_TYPE"] == "com.apple.product-type.application"
+        }
+        guard applications.count == 1,
+              let settings = applications[0]["buildSettings"] as? [String: String],
+              let bundleID = settings["PRODUCT_BUNDLE_IDENTIFIER"], !bundleID.isEmpty else {
+            throw PackageError.invalidInput("无法确认唯一的 iOS App Bundle ID；手动签名需要为每个应用目标单独配置描述文件。")
+        }
+        let signedTargets = entries.filter { entry in
+            let settings = entry["buildSettings"] as? [String: String] ?? [:]
+            return settings["PRODUCT_TYPE"] == "com.apple.product-type.app-extension"
+        }
+        guard signedTargets.isEmpty else {
+            throw PackageError.invalidInput("当前手动签名仅支持单个 App；含 Extension 的工程需要为各目标分别配置描述文件。")
+        }
+        return bundleID
     }
 
     private static func runXcodebuild(
@@ -374,6 +432,7 @@ nonisolated enum XcodePackager {
         let bundleIdentifier: String
         let teamIdentifier: String
         let profileName: String
+        let profileUUID: String
     }
 
     private static func signingInfo(from archiveURL: URL) throws -> SigningInfo {
@@ -413,6 +472,7 @@ nonisolated enum XcodePackager {
                 format: nil
               ) as? [String: Any],
               let profileName = profile["Name"] as? String,
+              let profileUUID = profile["UUID"] as? String,
               let teamIdentifiers = profile["TeamIdentifier"] as? [String],
               let teamIdentifier = teamIdentifiers.first else {
             throw PackageError.invalidInput("无法读取归档内的 Provisioning Profile 签名信息。")
@@ -421,22 +481,24 @@ nonisolated enum XcodePackager {
         return SigningInfo(
             bundleIdentifier: bundleIdentifier,
             teamIdentifier: teamIdentifier,
-            profileName: profileName
+            profileName: profileName,
+            profileUUID: profileUUID
         )
     }
 
     private static func makeExportOptionsPlist(
         at url: URL,
-        signingInfo: SigningInfo
+        signingInfo: SigningInfo,
+        manualProfile: ManualSigningProfile?
     ) throws {
         let options: [String: Any] = [
             "destination": "export",
-            "method": "debugging",
-            "signingCertificate": "Apple Development",
+            "method": manualProfile?.exportMethod ?? "debugging",
+            "signingCertificate": manualProfile?.certificateHash ?? "Apple Development",
             "signingStyle": "manual",
-            "teamID": signingInfo.teamIdentifier,
+            "teamID": manualProfile?.teamID ?? signingInfo.teamIdentifier,
             "provisioningProfiles": [
-                signingInfo.bundleIdentifier: signingInfo.profileName
+                signingInfo.bundleIdentifier: manualProfile?.uuid ?? signingInfo.profileName
             ],
             "stripSwiftSymbols": true,
             "thinning": "<none>"

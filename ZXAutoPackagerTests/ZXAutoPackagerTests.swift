@@ -43,6 +43,28 @@ struct ZXAutoPackagerTests {
         #expect(version.currentProjectVersion == "42")
     }
 
+    @Test func manualSigningRejectsExtensionAndUsesAppBundleID() throws {
+        let app = #"{"target":"App","buildSettings":{"PRODUCT_TYPE":"com.apple.product-type.application","PRODUCT_BUNDLE_IDENTIFIER":"com.example.app"}}"#
+        let extensionTarget = #"{"target":"Share","buildSettings":{"PRODUCT_TYPE":"com.apple.product-type.app-extension","PRODUCT_BUNDLE_IDENTIFIER":"com.example.app.share"}}"#
+        #expect(try XcodePackager.manualSigningBundleID(from: "[\(app)]") == "com.example.app")
+        #expect(throws: PackageError.self) {
+            try XcodePackager.manualSigningBundleID(from: "[\(app),\(extensionTarget)]")
+        }
+    }
+
+    @Test func manualSigningMatchesExactAndWildcardAppIDs() {
+        let exact = ManualSigningProfile(uuid: UUID().uuidString, name: "Demo", teamID: "TEAM",
+            appIdentifier: "TEAM.com.example.app", expiration: .distantFuture,
+            exportMethod: "debugging", certificateHash: "")
+        let wildcard = ManualSigningProfile(uuid: UUID().uuidString, name: "Demo", teamID: "TEAM",
+            appIdentifier: "TEAM.com.example.*", expiration: .distantFuture,
+            exportMethod: "debugging", certificateHash: "")
+        #expect(exact.matches(bundleID: "com.example.app"))
+        #expect(!exact.matches(bundleID: "com.example.other"))
+        #expect(wildcard.matches(bundleID: "com.example.app"))
+        #expect(!wildcard.matches(bundleID: "com.other.app"))
+    }
+
     @Test func parsesProjectAndWorkspaceSchemes() throws {
         let project = #"{ "project": { "name": "Demo", "schemes": ["App", "App-Debug"] } }"#
         let workspace = #"{ "workspace": { "name": "Demo", "schemes": ["WorkspaceApp"] } }"#

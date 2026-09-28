@@ -5,6 +5,7 @@ struct PackageConfigurationView: View {
     @State private var showAdvancedOptions = false
     @State private var showPgyerSettings = false
     @State private var showFeishuSettings = false
+    @State private var showSigningSettings = false
 
     var body: some View {
         GroupBox {
@@ -169,6 +170,7 @@ struct PackageConfigurationView: View {
     private var enabledOptions: [String] {
         var options: [String] = []
         if viewModel.useGitBranch { options.append("Worktree") }
+        if viewModel.platform == .iOS && viewModel.signingProfileUUID != nil { options.append("手动签名") }
         if viewModel.platform == .iOS && viewModel.uploadToPgyer { options.append("蒲公英") }
         if viewModel.sendToFeishu { options.append("飞书") }
         return options
@@ -176,6 +178,7 @@ struct PackageConfigurationView: View {
 
     private var optionsNeedSetup: Bool {
         (viewModel.useGitBranch && viewModel.selectedBranch.isEmpty) ||
+        (viewModel.platform == .iOS && viewModel.signingProfileUUID != nil && viewModel.provisioningProfileName == nil) ||
         (viewModel.platform == .iOS && viewModel.uploadToPgyer && pgyerNeedsSetup) ||
         feishuNeedsSetup
     }
@@ -206,15 +209,19 @@ struct PackageConfigurationView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("高级选项")
                 .font(.title3.bold())
-            advancedOptions
+            ScrollView {
+                advancedOptions
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             HStack {
                 Spacer()
                 Button("完成") { showAdvancedOptions = false }
-                    .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(24)
         .frame(width: 680)
+        .frame(maxHeight: 620)
     }
 
     private var advancedOptions: some View {
@@ -324,6 +331,56 @@ struct PackageConfigurationView: View {
                         Text("卡片使用已有 imageKey 显示图片；不会自动上传本次下载地址的二维码。下载地址来自蒲公英。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            if viewModel.platform == .iOS {
+                GridRow {
+                    fieldTitle("签名方式")
+                    HStack {
+                        Text(viewModel.signingProfileUUID == nil ? "使用工程原有签名" : "指定描述文件 · 手动签名")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                        Button(showSigningSettings ? "收起" : "配置…") {
+                            showSigningSettings.toggle()
+                        }
+                        .disabled(viewModel.isPackaging)
+                    }
+                }
+                if showSigningSettings {
+                    GridRow {
+                        fieldTitle("描述文件")
+                        HStack {
+                            Text(viewModel.provisioningProfileName ?? (viewModel.signingProfileUUID == nil ? "未指定" : "所选文件失效，请更换"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Spacer()
+                            Button(viewModel.signingProfileUUID == nil ? "选择…" : "更换…") {
+                                viewModel.importProvisioningProfile()
+                            }
+                            .disabled(viewModel.isPackaging)
+                            if viewModel.signingProfileUUID != nil {
+                                Button("清除") { viewModel.clearSigningProfile() }
+                                    .disabled(viewModel.isPackaging)
+                            }
+                        }
+                    }
+                    GridRow {
+                        fieldTitle("")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("使用钥匙串中与描述文件匹配的证书和私钥。所选描述文件会保存供后续 iOS 打包使用，临时覆盖工程自动签名，不修改工程；目前仅支持不含 Extension 的单 App。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let message = viewModel.signingImportMessage {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
             }
