@@ -1,0 +1,568 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		FB6BE5A830637C4F00261EF4 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FB6BE59230637C4E00261EF4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FB6BE59930637C4E00261EF4;
+			remoteInfo = ZXAutoPackager;
+		};
+		FB6BE5B230637C4F00261EF4 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FB6BE59230637C4E00261EF4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FB6BE59930637C4E00261EF4;
+			remoteInfo = ZXAutoPackager;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		FB6BE59A30637C4E00261EF4 /* ZXAutoPackager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ZXAutoPackager.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FB6BE5A730637C4F00261EF4 /* ZXAutoPackagerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZXAutoPackagerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FB6BE5B130637C4F00261EF4 /* ZXAutoPackagerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZXAutoPackagerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		FB6BE59C30637C4E00261EF4 /* ZXAutoPackager */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ZXAutoPackager;
+			sourceTree = "<group>";
+		};
+		FB6BE5AA30637C4F00261EF4 /* ZXAutoPackagerTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ZXAutoPackagerTests;
+			sourceTree = "<group>";
+		};
+		FB6BE5B430637C4F00261EF4 /* ZXAutoPackagerUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ZXAutoPackagerUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		FB6BE59730637C4E00261EF4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FB6BE5A430637C4F00261EF4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FB6BE5AE30637C4F00261EF4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		FB6BE59130637C4E00261EF4 = {
+			isa = PBXGroup;
+			children = (
+				FB6BE59C30637C4E00261EF4 /* ZXAutoPackager */,
+				FB6BE5AA30637C4F00261EF4 /* ZXAutoPackagerTests */,
+				FB6BE5B430637C4F00261EF4 /* ZXAutoPackagerUITests */,
+				FB6BE59B30637C4E00261EF4 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FB6BE59B30637C4E00261EF4 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				FB6BE59A30637C4E00261EF4 /* ZXAutoPackager.app */,
+				FB6BE5A730637C4F00261EF4 /* ZXAutoPackagerTests.xctest */,
+				FB6BE5B130637C4F00261EF4 /* ZXAutoPackagerUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		FB6BE59930637C4E00261EF4 /* ZXAutoPackager */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FB6BE5BB30637C4F00261EF4 /* Build configuration list for PBXNativeTarget "ZXAutoPackager" */;
+			buildPhases = (
+				FB6BE59630637C4E00261EF4 /* Sources */,
+				FB6BE59730637C4E00261EF4 /* Frameworks */,
+				FB6BE59830637C4E00261EF4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				FB6BE59C30637C4E00261EF4 /* ZXAutoPackager */,
+			);
+			name = ZXAutoPackager;
+			packageProductDependencies = (
+			);
+			productName = ZXAutoPackager;
+			productReference = FB6BE59A30637C4E00261EF4 /* ZXAutoPackager.app */;
+			productType = "com.apple.product-type.application";
+		};
+		FB6BE5A630637C4F00261EF4 /* ZXAutoPackagerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FB6BE5BE30637C4F00261EF4 /* Build configuration list for PBXNativeTarget "ZXAutoPackagerTests" */;
+			buildPhases = (
+				FB6BE5A330637C4F00261EF4 /* Sources */,
+				FB6BE5A430637C4F00261EF4 /* Frameworks */,
+				FB6BE5A530637C4F00261EF4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FB6BE5A930637C4F00261EF4 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				FB6BE5AA30637C4F00261EF4 /* ZXAutoPackagerTests */,
+			);
+			name = ZXAutoPackagerTests;
+			packageProductDependencies = (
+			);
+			productName = ZXAutoPackagerTests;
+			productReference = FB6BE5A730637C4F00261EF4 /* ZXAutoPackagerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		FB6BE5B030637C4F00261EF4 /* ZXAutoPackagerUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FB6BE5C130637C4F00261EF4 /* Build configuration list for PBXNativeTarget "ZXAutoPackagerUITests" */;
+			buildPhases = (
+				FB6BE5AD30637C4F00261EF4 /* Sources */,
+				FB6BE5AE30637C4F00261EF4 /* Frameworks */,
+				FB6BE5AF30637C4F00261EF4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FB6BE5B330637C4F00261EF4 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				FB6BE5B430637C4F00261EF4 /* ZXAutoPackagerUITests */,
+			);
+			name = ZXAutoPackagerUITests;
+			packageProductDependencies = (
+			);
+			productName = ZXAutoPackagerUITests;
+			productReference = FB6BE5B130637C4F00261EF4 /* ZXAutoPackagerUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		FB6BE59230637C4E00261EF4 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2640;
+				LastUpgradeCheck = 2640;
+				TargetAttributes = {
+					FB6BE59930637C4E00261EF4 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+					FB6BE5A630637C4F00261EF4 = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = FB6BE59930637C4E00261EF4;
+					};
+					FB6BE5B030637C4F00261EF4 = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = FB6BE59930637C4E00261EF4;
+					};
+				};
+			};
+			buildConfigurationList = FB6BE59530637C4E00261EF4 /* Build configuration list for PBXProject "ZXAutoPackager" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = FB6BE59130637C4E00261EF4;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = FB6BE59B30637C4E00261EF4 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				FB6BE59930637C4E00261EF4 /* ZXAutoPackager */,
+				FB6BE5A630637C4F00261EF4 /* ZXAutoPackagerTests */,
+				FB6BE5B030637C4F00261EF4 /* ZXAutoPackagerUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		FB6BE59830637C4E00261EF4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FB6BE5A530637C4F00261EF4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FB6BE5AF30637C4F00261EF4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		FB6BE59630637C4E00261EF4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FB6BE5A330637C4F00261EF4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FB6BE5AD30637C4F00261EF4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		FB6BE5A930637C4F00261EF4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FB6BE59930637C4E00261EF4 /* ZXAutoPackager */;
+			targetProxy = FB6BE5A830637C4F00261EF4 /* PBXContainerItemProxy */;
+		};
+		FB6BE5B330637C4F00261EF4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FB6BE59930637C4E00261EF4 /* ZXAutoPackager */;
+			targetProxy = FB6BE5B230637C4F00261EF4 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		FB6BE5B930637C4F00261EF4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		FB6BE5BA30637C4F00261EF4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		FB6BE5BC30637C4F00261EF4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 2;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ZX.ZXAutoPackager;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		FB6BE5BD30637C4F00261EF4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 2;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ZX.ZXAutoPackager;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		FB6BE5BF30637C4F00261EF4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ZX.ZXAutoPackagerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ZXAutoPackager.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ZXAutoPackager";
+			};
+			name = Debug;
+		};
+		FB6BE5C030637C4F00261EF4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ZX.ZXAutoPackagerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ZXAutoPackager.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ZXAutoPackager";
+			};
+			name = Release;
+		};
+		FB6BE5C230637C4F00261EF4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ZX.ZXAutoPackagerUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = ZXAutoPackager;
+			};
+			name = Debug;
+		};
+		FB6BE5C330637C4F00261EF4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ZX.ZXAutoPackagerUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = ZXAutoPackager;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		FB6BE59530637C4E00261EF4 /* Build configuration list for PBXProject "ZXAutoPackager" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FB6BE5B930637C4F00261EF4 /* Debug */,
+				FB6BE5BA30637C4F00261EF4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FB6BE5BB30637C4F00261EF4 /* Build configuration list for PBXNativeTarget "ZXAutoPackager" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FB6BE5BC30637C4F00261EF4 /* Debug */,
+				FB6BE5BD30637C4F00261EF4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FB6BE5BE30637C4F00261EF4 /* Build configuration list for PBXNativeTarget "ZXAutoPackagerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FB6BE5BF30637C4F00261EF4 /* Debug */,
+				FB6BE5C030637C4F00261EF4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FB6BE5C130637C4F00261EF4 /* Build configuration list for PBXNativeTarget "ZXAutoPackagerUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FB6BE5C230637C4F00261EF4 /* Debug */,
+				FB6BE5C330637C4F00261EF4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = FB6BE59230637C4E00261EF4 /* Project object */;
+}

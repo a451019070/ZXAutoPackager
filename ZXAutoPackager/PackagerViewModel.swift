@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import UniformTypeIdentifiers
 
 private final class BuildLogBuffer: @unchecked Sendable {
     private let lock = NSLock()
@@ -37,13 +38,25 @@ private final class ScopedDirectoryAccess: @unchecked Sendable {
     }
 }
 
+enum PackagePlatform: String, CaseIterable, Identifiable, Sendable {
+    case iOS = "iOS"
+    case macOS = "macOS"
+
+    var id: String { rawValue }
+    var destination: String { "generic/platform=\(rawValue)" }
+    var artifactType: String { self == .iOS ? "IPA" : "ZIP" }
+}
+
 struct PackageRequest: Sendable {
+    let platform: PackagePlatform
     let containerPath: String
     let scheme: String
     let configuration: String
     let versionNumber: String
     let buildNumber: Int
     let outputDirectory: String
+    let signingProfileUUID: String?
+    let isTemporaryProject: Bool
 }
 
 struct PackageResult: Sendable {
@@ -98,6 +111,15 @@ final class PackagerViewModel: ObservableObject {
     @Published var scheme = "" {
         didSet { defaults.set(scheme, forKey: Keys.scheme) }
     }
+    @Published var platform: PackagePlatform = .iOS {
+        didSet {
+            defaults.set(platform.rawValue, forKey: Keys.platform)
+            if platform == .macOS {
+                uploadToPgyer = false
+                usePgyerBuildNumber = false
+            }
+        }
+    }
     @Published var configuration: Configuration = .release {
         didSet { defaults.set(configuration.rawValue, forKey: Keys.configuration) }
     }
@@ -123,6 +145,15 @@ final class PackagerViewModel: ObservableObject {
         didSet { defaults.set(pgyerAppKey, forKey: Keys.pgyerAppKey) }
     }
     @Published var updateDescription = ""
+    @Published var sendToFeishu = false {
+        didSet { defaults.set(sendToFeishu, forKey: Keys.sendToFeishu) }
+    }
+    @Published var feishuWebhook = "" {
+        didSet { defaults.set(feishuWebhook, forKey: Keys.feishuWebhook) }
+    }
+    @Published var feishuImageKey = "" {
+        didSet { defaults.set(feishuImageKey, forKey: Keys.feishuImageKey) }
+    }
     @Published var useGitBranch = false {
         didSet { defaults.set(useGitBranch, forKey: Keys.useGitBranch) }
     }
@@ -132,7 +163,18 @@ final class PackagerViewModel: ObservableObject {
     @Published var installPods = true {
         didSet { defaults.set(installPods, forKey: Keys.installPods) }
     }
+    @Published var provisioningProfileName: String?
+    @Published var signingProfileUUID: String? {
+        didSet { defaults.set(signingProfileUUID, forKey: Keys.signingProfileUUID) }
+    }
+    @Published var signingImportMessage: String?
+    @Published var installedSigningProfiles: [ManualSigningProfile] = []
+    @Published var signingProfileBundleID: String?
+    @Published var signingProfilesMessage: String?
+    @Published var isLoadingSigningProfiles = false
     @Published var remoteBranches: [String] = []
+    @Published var availableSchemes: [String] = []
+    @Published var isLoadingSchemes = false
     @Published var isLoadingBranches = false
     @Published var isLoadingPgyerBuildNumber = false
     @Published var isPackaging = false
@@ -147,6 +189,7 @@ final class PackagerViewModel: ObservableObject {
     private enum Keys {
         static let containerPath = "ZXAutoPackager.containerPath"
         static let scheme = "ZXAutoPackager.scheme"
+        static let platform = "ZXAutoPackager.platform"
         static let configuration = "ZXAutoPackager.configuration"
         static let versionNumber = "ZXAutoPackager.versionNumber"
         static let buildNumber = "ZXAutoPackager.buildNumber"
@@ -157,9 +200,13 @@ final class PackagerViewModel: ObservableObject {
         static let usePgyerBuildNumber = "ZXAutoPackager.usePgyerBuildNumber"
         static let pgyerAPIKey = "ZXAutoPackager.pgyerAPIKey"
         static let pgyerAppKey = "ZXAutoPackager.pgyerAppKey"
+        static let sendToFeishu = "ZXAutoPackager.sendToFeishu"
+        static let feishuWebhook = "ZXAutoPackager.feishuWebhook"
+        static let feishuImageKey = "ZXAutoPackager.feishuImageKey"
         static let useGitBranch = "ZXAutoPackager.useGitBranch"
         static let selectedBranch = "ZXAutoPackager.selectedBranch"
         static let installPods = "ZXAutoPackager.installPods"
+        static let signingProfileUUID = "ZXAutoPackager.signingProfileUUID"
         static let lastSuccessfulBuild = "ZXAutoPackager.lastSuccessfulBuild"
     }
 
@@ -169,6 +216,8 @@ final class PackagerViewModel: ObservableObject {
     private var elapsedTimeTask: Task<Void, Never>?
     private var packageTask: Task<Void, Never>?
     private var cancellationController: BuildCancellationController?
+    private var schemeLookupID = UUID()
+    private var signingLookupID = UUID()
 
     deinit {
         logRefreshTask?.cancel()
@@ -180,16 +229,21 @@ final class PackagerViewModel: ObservableObject {
     init() {
         containerPath = defaults.string(forKey: Keys.containerPath) ?? ""
         scheme = defaults.string(forKey: Keys.scheme) ?? ""
+        platform = PackagePlatform(rawValue: defaults.string(forKey: Keys.platform) ?? "") ?? .iOS
         configuration = Configuration(
             rawValue: defaults.string(forKey: Keys.configuration) ?? ""
         ) ?? .release
         versionNumber = defaults.string(forKey: Keys.versionNumber) ?? ""
         outputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
-        uploadToPgyer = defaults.bool(forKey: Keys.uploadToPgyer)
-        usePgyerBuildNumber = false
-        defaults.set(false, forKey: Keys.usePgyerBuildNumber)
+        uploadToPgyer = platform == .iOS && defaults.bool(forKey: Keys.uploadToPgyer)
+        usePgyerBuildNumber = platform == .iOS && defaults.bool(forKey: Keys.usePgyerBuildNumber)
         pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
         pgyerAppKey = defaults.string(forKey: Keys.pgyerAppKey) ?? ""
+        sendToFeishu = defaults.bool(forKey: Keys.sendToFeishu)
+        feishuWebhook = defaults.string(forKey: Keys.feishuWebhook) ?? ""
+        feishuImageKey = defaults.string(forKey: Keys.feishuImageKey) ?? ""
+        defaults.removeObject(forKey: "ZXAutoPackager.feishuAppID")
+        defaults.removeObject(forKey: "ZXAutoPackager.feishuAppSecret")
         defaults.removeObject(forKey: "ZXAutoPackager.updateDescription")
         useGitBranch = defaults.bool(forKey: Keys.useGitBranch)
         selectedBranch = defaults.string(forKey: Keys.selectedBranch) ?? ""
@@ -198,6 +252,14 @@ final class PackagerViewModel: ObservableObject {
             : defaults.bool(forKey: Keys.installPods)
 
         buildNumber = defaults.string(forKey: Keys.buildNumber) ?? ""
+        signingProfileUUID = defaults.string(forKey: Keys.signingProfileUUID)
+        if let signingProfileUUID {
+            do {
+                provisioningProfileName = try ManualSigningProfile.load(uuid: signingProfileUUID).name
+            } catch {
+                signingImportMessage = error.localizedDescription
+            }
+        }
 
         if !containerPath.isEmpty || !outputDirectory.isEmpty {
             statusMessage = "已恢复上次填写的打包配置"
@@ -210,19 +272,46 @@ final class PackagerViewModel: ObservableObject {
         let versionCanResolve = trimmedVersion.isEmpty || isValidVersionNumber
         let buildCanResolve = usePgyerBuildNumber || trimmedBuild.isEmpty || Int(trimmedBuild).map { $0 > 0 } == true
 
-        return !isPackaging &&
+        return         !isPackaging &&
+        !isLoadingSchemes &&
         !isLoadingPgyerBuildNumber &&
         !containerPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        (availableSchemes.isEmpty || availableSchemes.contains(scheme)) &&
         versionCanResolve &&
         buildCanResolve &&
+        (platform == .iOS || (!uploadToPgyer && !usePgyerBuildNumber)) &&
         !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (!(uploadToPgyer || usePgyerBuildNumber) || hasPgyerAPIKey) &&
         (!usePgyerBuildNumber || hasPgyerAppKey) &&
-        (!useGitBranch || !selectedBranch.isEmpty)
+        (!useGitBranch || !selectedBranch.isEmpty) &&
+        (!sendToFeishu || FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) != nil)
+    }
+
+    var configurationHint: String {
+        if containerPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请先选择项目文件夹" }
+        if isLoadingSchemes { return "正在读取项目 Scheme…" }
+        if scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请选择或填写 Scheme" }
+        if !availableSchemes.isEmpty && !availableSchemes.contains(scheme) { return "请选择当前工程可用的 Scheme" }
+        if outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请选择导出目录" }
+        if platform == .macOS && (uploadToPgyer || usePgyerBuildNumber) { return "macOS 不支持蒲公英上传或 Build 号查询" }
+        if !versionNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isValidVersionNumber {
+            return "请检查版本号格式"
+        }
+        let trimmedBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !usePgyerBuildNumber && !trimmedBuild.isEmpty && Int(trimmedBuild).map({ $0 > 0 }) != true {
+            return "请填写有效的 Build 号"
+        }
+        if useGitBranch && selectedBranch.isEmpty { return "请在高级选项中选择远程分支" }
+        if (uploadToPgyer || usePgyerBuildNumber) && !hasPgyerAPIKey { return "请填写蒲公英 API Key" }
+        if usePgyerBuildNumber && !hasPgyerAppKey { return "请填写蒲公英 App Key" }
+        if sendToFeishu && FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) == nil { return "请填写有效的飞书机器人 Webhook" }
+        if isLoadingPgyerBuildNumber { return "正在查询蒲公英 Build 号…" }
+        return "配置已就绪，可以开始打包"
     }
 
     var canFetchPgyerBuildNumber: Bool {
+        platform == .iOS &&
         !isPackaging &&
         !isLoadingPgyerBuildNumber &&
         isValidVersionNumber &&
@@ -325,6 +414,45 @@ final class PackagerViewModel: ObservableObject {
         }
     }
 
+    func refreshSchemes() {
+        guard !containerPath.isEmpty, !isPackaging else { return }
+        guard let projectAccess = restoreAccess(
+            bookmarkKey: Keys.projectBookmark,
+            fallbackPath: containerPath,
+            directoryName: "项目目录"
+        ) else { return }
+
+        let lookupID = UUID()
+        schemeLookupID = lookupID
+        let projectPath = containerPath
+        isLoadingSchemes = true
+        statusMessage = "正在读取项目 Scheme…"
+        Task.detached(priority: .userInitiated) {
+            defer { projectAccess.stop() }
+            do {
+                let schemes = try XcodePackager.listSchemes(containerPath: projectAccess.url.path)
+                await MainActor.run {
+                    guard self.schemeLookupID == lookupID, self.containerPath == projectPath else { return }
+                    self.availableSchemes = schemes
+                    if !schemes.contains(self.scheme) {
+                        self.scheme = schemes.count == 1 ? schemes[0] : ""
+                    }
+                    self.isLoadingSchemes = false
+                    self.statusMessage = schemes.isEmpty
+                        ? "当前工程没有可用的共享 Scheme，请在 Xcode 中检查 Scheme 配置"
+                        : schemes.count == 1 ? "已选择 Scheme：\(schemes[0])" : "请选择要打包的 Scheme"
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.schemeLookupID == lookupID, self.containerPath == projectPath else { return }
+                    self.availableSchemes = []
+                    self.isLoadingSchemes = false
+                    self.statusMessage = "读取 Scheme 失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     func chooseProject() {
         let panel = NSOpenPanel()
         panel.title = "选择 Xcode 项目文件夹"
@@ -338,11 +466,17 @@ final class PackagerViewModel: ObservableObject {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         saveBookmark(for: url, key: Keys.projectBookmark)
+        let projectChanged = containerPath != url.path
         containerPath = url.path
-        if scheme.isEmpty {
-            scheme = url.lastPathComponent
+        if projectChanged {
+            scheme = ""
+            availableSchemes = []
+            versionNumber = ""
+            buildNumber = ""
+            remoteBranches = []
+            selectedBranch = ""
         }
-        statusMessage = "项目文件夹已选择，将自动识别 Xcode 工程"
+        refreshSchemes()
         if useGitBranch {
             refreshBranches(fetchRemote: false)
         }
@@ -364,9 +498,121 @@ final class PackagerViewModel: ObservableObject {
         statusMessage = "导出目录已选择"
     }
 
+    func refreshSigningProfiles() {
+        guard !isPackaging else { return }
+        let lookupID = UUID()
+        signingLookupID = lookupID
+        let projectPath = containerPath
+        let selectedScheme = scheme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedConfiguration = configuration.rawValue
+        let shouldCheckProject = !projectPath.isEmpty && !selectedScheme.isEmpty
+        let projectAccess = shouldCheckProject ? restoreAccess(
+            bookmarkKey: Keys.projectBookmark,
+            fallbackPath: projectPath,
+            directoryName: "项目目录"
+        ) : nil
+        isLoadingSigningProfiles = true
+        signingProfileBundleID = nil
+        signingProfilesMessage = nil
+        Task.detached(priority: .userInitiated) {
+            defer { projectAccess?.stop() }
+            var profiles: [ManualSigningProfile] = []
+            var bundleID: String?
+            var message: String?
+            do {
+                profiles = try ManualSigningProfile.installedProfiles()
+            } catch {
+                message = "读取 Xcode 描述文件失败：\(error.localizedDescription)"
+            }
+            if shouldCheckProject {
+                if let projectAccess {
+                    do {
+                        bundleID = try XcodePackager.applicationBundleID(
+                            containerPath: projectAccess.url.path, scheme: selectedScheme,
+                            configuration: selectedConfiguration, cancellation: BuildCancellationController()
+                        )
+                    } catch {
+                        message = [message, "无法核对当前工程：\(error.localizedDescription)"].compactMap { $0 }.joined(separator: "；")
+                    }
+                } else {
+                    message = [message, "无法访问项目目录，请重新选择项目文件夹。"].compactMap { $0 }.joined(separator: "；")
+                }
+            } else {
+                message = [message, "选择项目和 Scheme 后可查看匹配的描述文件。"].compactMap { $0 }.joined(separator: "；")
+            }
+            await MainActor.run {
+                guard self.signingLookupID == lookupID,
+                      self.containerPath == projectPath,
+                      self.scheme == selectedScheme,
+                      self.configuration.rawValue == selectedConfiguration else { return }
+                self.installedSigningProfiles = ManualSigningProfile.eligibleProfiles(
+                    from: profiles, bundleID: bundleID
+                )
+                self.signingProfileBundleID = bundleID
+                self.signingProfilesMessage = message
+                self.isLoadingSigningProfiles = false
+            }
+        }
+    }
+
+    func selectSigningProfile(_ profile: ManualSigningProfile) {
+        guard !isPackaging else { return }
+        guard let bundleID = signingProfileBundleID else {
+            signingImportMessage = "请先选择工程和 Scheme，并刷新列表以核对 Bundle ID。"
+            return
+        }
+        do {
+            let installed = try ManualSigningProfile.load(uuid: profile.uuid)
+            try installed.validate(bundleID: bundleID)
+            signingProfileUUID = installed.uuid
+            provisioningProfileName = installed.name
+            signingImportMessage = "已选用 \(installed.name)；后续 iOS 打包将使用手动签名。"
+        } catch {
+            signingImportMessage = error.localizedDescription
+        }
+    }
+
+    func clearSigningProfile() {
+        signingProfileUUID = nil
+        provisioningProfileName = nil
+        signingImportMessage = "已清除指定描述文件，恢复工程原有签名方式。"
+    }
+
+    func importProvisioningProfile() {
+        let panel = NSOpenPanel()
+        panel.title = "选择 iOS 描述文件"
+        panel.prompt = "导入描述文件"
+        panel.allowedContentTypes = [UTType(filenameExtension: "mobileprovision") ?? .data]
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            let profile = try ManualSigningProfile.read(data)
+            guard let bundleID = signingProfileBundleID else {
+                throw PackageError.invalidInput("请先选择工程和 Scheme，并刷新列表以核对 Bundle ID。")
+            }
+            try profile.validate(bundleID: bundleID)
+            let destination = ManualSigningProfile.installedURL(for: profile.uuid)
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try data.write(to: destination, options: .atomic)
+            provisioningProfileName = profile.name
+            signingProfileUUID = profile.uuid
+            signingImportMessage = "已选用 \(profile.name)；后续 iOS 打包将使用手动签名。"
+            refreshSigningProfiles()
+        } catch {
+            signingImportMessage = error.localizedDescription
+        }
+    }
+
     func startPackaging() {
         guard canPackage else {
-            statusMessage = "请完整填写工程、Scheme、导出目录及所需的蒲公英配置"
+            statusMessage = configurationHint
             return
         }
 
@@ -387,6 +633,7 @@ final class PackagerViewModel: ObservableObject {
         }
 
         let scheme = scheme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let platform = platform
         let configuration = configuration.rawValue
         let enteredVersion = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let enteredBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -398,6 +645,10 @@ final class PackagerViewModel: ObservableObject {
         let apiKey = pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let appKey = pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let updateDescription = updateDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldSendToFeishu = sendToFeishu
+        let webhook = feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imageKey = feishuImageKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedSigningProfileUUID = platform == .iOS ? signingProfileUUID : nil
 
         isPackaging = true
         elapsedSeconds = 0
@@ -448,6 +699,7 @@ final class PackagerViewModel: ObservableObject {
                         containerPath: effectiveProjectPath,
                         scheme: scheme,
                         configuration: configuration,
+                        platform: platform,
                         cancellation: cancellation
                     )
                     if resolvedVersion.isEmpty {
@@ -492,16 +744,19 @@ final class PackagerViewModel: ObservableObject {
                     self.versionNumber = resolvedVersion
                     self.buildNumber = String(build)
                     self.isLoadingPgyerBuildNumber = false
-                    self.statusMessage = "正在归档并导出 \(configuration) IPA…"
+                    self.statusMessage = "正在归档并导出 \(configuration) \(platform.artifactType)…"
                 }
 
                 let request = PackageRequest(
+                    platform: platform,
                     containerPath: effectiveProjectPath,
                     scheme: scheme,
                     configuration: configuration,
                     versionNumber: resolvedVersion,
                     buildNumber: build,
-                    outputDirectory: outputAccess.url.path
+                    outputDirectory: outputAccess.url.path,
+                    signingProfileUUID: selectedSigningProfileUUID,
+                    isTemporaryProject: shouldUseGitBranch
                 )
                 let packageResult = try XcodePackager.package(
                     request,
@@ -529,6 +784,29 @@ final class PackagerViewModel: ObservableObject {
                     }
                 }
 
+                var notificationError: String?
+                if shouldSendToFeishu {
+                    logBuffer.append("\n===== 飞书通知 =====\n")
+                    do {
+                        try await FeishuNotifier.send(
+                            FeishuNotification(
+                                scheme: scheme,
+                                platform: platform,
+                                result: packageResult,
+                                downloadURL: uploadResult?.downloadURL,
+                                updateDescription: updateDescription
+                            ),
+                            webhook: webhook,
+                            imageKey: imageKey
+                        ) { chunk in
+                            logBuffer.append(chunk)
+                        }
+                    } catch {
+                        notificationError = error.localizedDescription
+                        logBuffer.append("飞书通知失败：\(error.localizedDescription)\n")
+                    }
+                }
+
                 await MainActor.run {
                     self.finishLogRefresh(from: logBuffer)
                     self.stopElapsedTimer()
@@ -553,6 +831,11 @@ final class PackagerViewModel: ObservableObject {
                         self.showPgyerQRCode()
                     } else {
                         self.statusMessage = "打包成功：\(URL(fileURLWithPath: packageResult.artifactPath).lastPathComponent)"
+                    }
+                    if let notificationError {
+                        self.statusMessage += "；飞书通知失败：\(notificationError)"
+                    } else if shouldSendToFeishu {
+                        self.statusMessage += "；飞书通知已发送"
                     }
                     self.defaults.set(build, forKey: Keys.lastSuccessfulBuild)
                     self.buildNumber = String(build + 1)
