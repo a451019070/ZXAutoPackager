@@ -208,6 +208,8 @@ final class PackagerViewModel: ObservableObject {
     @Published var packageSummary: PackageSummary?
     @Published var pgyerDownloadURL: String?
     @Published var isShowingQRCode = false
+    @Published private(set) var packageHistory: [PackageHistoryRecord] = []
+    @Published private(set) var historyError: String?
 
     private enum Keys {
         static let containerPath = "ZXAutoPackager.containerPath"
@@ -236,6 +238,7 @@ final class PackagerViewModel: ObservableObject {
     }
 
     private let defaults = UserDefaults.standard
+    private let historyStore = PackageHistoryStore()
     private let maximumLogLength = 300_000
     private var logRefreshTask: Task<Void, Never>?
     private var elapsedTimeTask: Task<Void, Never>?
@@ -269,6 +272,11 @@ final class PackagerViewModel: ObservableObject {
     }
 
     init() {
+        do {
+            packageHistory = try historyStore.load()
+        } catch {
+            historyError = "读取打包历史失败：\(error.localizedDescription)"
+        }
         containerPath = defaults.string(forKey: Keys.containerPath) ?? ""
         scheme = defaults.string(forKey: Keys.scheme) ?? ""
         platform = PackagePlatform(rawValue: defaults.string(forKey: Keys.platform) ?? "") ?? .iOS
@@ -992,6 +1000,19 @@ final class PackagerViewModel: ObservableObject {
                     } else if shouldSendToFeishu {
                         self.statusMessage += "；飞书通知已发送"
                     }
+                    self.recordPackage(PackageHistoryRecord(
+                        id: UUID(),
+                        completedAt: Date(),
+                        scheme: scheme,
+                        platform: platform.rawValue,
+                        artifactPath: packageResult.artifactPath,
+                        fileSize: packageResult.fileSize,
+                        version: packageResult.versionNumber,
+                        buildNumber: packageResult.buildNumber,
+                        configuration: packageResult.configuration,
+                        durationSeconds: self.elapsedSeconds,
+                        downloadURL: uploadResult?.downloadURL
+                    ))
                     self.defaults.set(build, forKey: Keys.lastSuccessfulBuild)
                     self.buildNumber = String(build + 1)
                     self.updateDescription = ""
@@ -1190,6 +1211,17 @@ final class PackagerViewModel: ObservableObject {
 
         saveBookmark(for: fallbackURL, key: bookmarkKey)
         return ScopedDirectoryAccess(url: fallbackURL)
+    }
+
+    private func recordPackage(_ record: PackageHistoryRecord) {
+        do {
+            let updated = [record] + packageHistory
+            try historyStore.save(updated)
+            packageHistory = updated
+            historyError = nil
+        } catch {
+            historyError = "保存打包历史失败：\(error.localizedDescription)"
+        }
     }
 
     func showPgyerQRCode() {

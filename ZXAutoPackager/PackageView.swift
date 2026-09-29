@@ -2,10 +2,19 @@ import SwiftUI
 
 struct PackageView: View {
     @StateObject private var viewModel = PackagerViewModel()
+    @State private var isShowingHistory = false
 
     var body: some View {
         VStack(spacing: 0) {
-            PackageHeaderView()
+            HStack {
+                PackageHeaderView()
+                Button {
+                    isShowingHistory = true
+                } label: {
+                    Label("打包历史", systemImage: "clock.arrow.circlepath")
+                }
+                .padding(.trailing, 24)
+            }
             Divider()
             ScrollView {
                 VStack(spacing: 18) {
@@ -33,6 +42,9 @@ struct PackageView: View {
             if viewModel.useGitBranch && viewModel.remoteBranches.isEmpty {
                 viewModel.refreshBranches(fetchRemote: false)
             }
+        }
+        .sheet(isPresented: $isShowingHistory) {
+            PackageHistoryView(viewModel: viewModel)
         }
         .sheet(isPresented: $viewModel.isShowingQRCode) {
             if let downloadURL = viewModel.pgyerDownloadURL {

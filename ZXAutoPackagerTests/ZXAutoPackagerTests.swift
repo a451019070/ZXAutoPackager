@@ -3,6 +3,31 @@ import Testing
 @testable import ZXAutoPackager
 
 struct ZXAutoPackagerTests {
+    @Test func packageHistoryPersistsAndLoadsNewestFirst() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PackageHistoryStore(fileURL: directory.appendingPathComponent("history.json"))
+        #expect(try store.load().isEmpty)
+
+        let older = PackageHistoryRecord(
+            id: UUID(), completedAt: Date(timeIntervalSince1970: 100), scheme: "App", platform: "iOS",
+            artifactPath: "/tmp/first.ipa", fileSize: 1024, version: "1.0", buildNumber: 1,
+            configuration: "Debug", durationSeconds: 157, downloadURL: nil
+        )
+        let newer = PackageHistoryRecord(
+            id: UUID(), completedAt: Date(timeIntervalSince1970: 200), scheme: "App", platform: "iOS",
+            artifactPath: "/tmp/second.ipa", fileSize: 2048, version: "1.1", buildNumber: 2,
+            configuration: "Release", durationSeconds: 180, downloadURL: "https://example.com/app"
+        )
+        try store.save([older, newer])
+
+        let loaded = try store.load()
+        #expect(loaded.map(\.id) == [newer.id, older.id])
+        #expect(loaded[0].downloadURL == newer.downloadURL)
+        #expect(loaded[1].durationText == "02:37")
+        #expect(loaded[1].fileName == "first.ipa")
+    }
+
     @Test func maximumPgyerBuildNumberFiltersVersionAndComparesNumerically() {
         let records = [
             PgyerBuildRecord(buildKey: "a", buildVersion: "1.0", buildVersionNo: "9"),
