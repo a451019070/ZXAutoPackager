@@ -194,20 +194,18 @@ nonisolated enum XcodePackager {
         try fileManager.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: temporaryRoot) }
 
-        var buildDirectoryURL = projectDirectoryURL
-        if manualProfile != nil && !request.isTemporaryProject {
-            guard !cancellation.isCancelled else { throw PackageError.cancelled }
-            buildDirectoryURL = temporaryRoot.appendingPathComponent("Project", isDirectory: true)
-            try fileManager.copyItem(at: projectDirectoryURL, to: buildDirectoryURL)
-            guard !cancellation.isCancelled else { throw PackageError.cancelled }
+        let containerArguments = try arguments(for: originalContainerURL)
+        var signingBackup: (file: URL, contents: Data)?
+        defer {
+            if let signingBackup {
+                try? signingBackup.contents.write(to: signingBackup.file, options: .atomic)
+            }
         }
-        let containerURL = manualProfile == nil ? originalContainerURL : try findXcodeContainer(in: buildDirectoryURL)
-        let containerArguments = try arguments(for: containerURL)
         if let manualProfile {
-            try configureManualSigning(
+            signingBackup = try configureManualSigning(
                 containerArguments: containerArguments, scheme: request.scheme,
                 configuration: request.configuration, profile: manualProfile,
-                buildRoot: buildDirectoryURL, cancellation: cancellation
+                buildRoot: projectDirectoryURL, cancellation: cancellation
             )
         }
         try fileManager.createDirectory(at: outputURL, withIntermediateDirectories: true)
@@ -338,7 +336,7 @@ nonisolated enum XcodePackager {
         containerArguments: [String], scheme: String, configuration: String,
         profile: ManualSigningProfile, buildRoot: URL,
         cancellation: BuildCancellationController
-    ) throws {
+    ) throws -> (file: URL, contents: Data) {
         let result = try runXcodebuild(
             containerArguments + ["-scheme", scheme, "-configuration", configuration,
                                   "-destination", PackagePlatform.iOS.destination, "-showBuildSettings", "-json"],
@@ -367,14 +365,15 @@ nonisolated enum XcodePackager {
         guard projectURL.pathExtension == "xcodeproj",
               resolvedProject.path.hasPrefix(resolvedRoot.path + "/"),
               resolvedPBXProj.path.hasPrefix(resolvedRoot.path + "/") else {
-            throw PackageError.invalidInput("App 目标不在临时工程目录中，已停止签名设置修改。")
+            throw PackageError.invalidInput("App 目标不在所选项目目录中，已停止签名设置修改。")
         }
+        let original = try Data(contentsOf: pbxproj)
         let changed = try manuallySignedProject(
-            Data(contentsOf: pbxproj), targetName: targetName,
+            original, targetName: targetName,
             configuration: configuration, profile: profile
         )
         try changed.write(to: pbxproj, options: .atomic)
-        guard !cancellation.isCancelled else { throw PackageError.cancelled }
+        return (pbxproj, original)
     }
 
     static func manuallySignedProject(

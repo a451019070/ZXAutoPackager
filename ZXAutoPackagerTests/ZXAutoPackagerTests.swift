@@ -282,6 +282,19 @@ struct ZXAutoPackagerTests {
         #expect(PgyerUploader.maximumBuildNumber(in: records, matching: "1.0") == nil)
     }
 
+    @Test func preparesSelectedBranchWithoutMerging() throws {
+        let root = try makeMergeRepository(conflicting: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = try GitWorktreeManager.prepare(
+            projectPath: root.path, branch: "base", mergeBranches: [],
+            installPods: false, cancellation: BuildCancellationController(), onOutput: { _ in }
+        )
+        defer { GitWorktreeManager.cleanup(context) }
+
+        #expect(try String(contentsOf: context.projectDirectory.appendingPathComponent("base.txt"), encoding: .utf8) == "base")
+        #expect(!FileManager.default.fileExists(atPath: context.projectDirectory.appendingPathComponent("feature.txt").path))
+    }
+
     @Test func mergesAnotherBranchOnlyInTemporaryWorktree() throws {
         let root = try makeMergeRepository(conflicting: false)
         defer { try? FileManager.default.removeItem(at: root) }

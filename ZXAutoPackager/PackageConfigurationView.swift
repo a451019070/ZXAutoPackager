@@ -315,7 +315,9 @@ struct PackageConfigurationView: View {
                             viewModel.remoteBranches.allSatisfy {
                                 $0 == viewModel.selectedBranch || viewModel.mergeBranches.contains($0)
                             })
-                        Text("先点“准备并合并”，成功后再点“开始打包”；冲突会停止准备。")
+                        Text(viewModel.mergeBranches.isEmpty
+                             ? "不合并其他分支，可直接打包所选远程分支。"
+                             : "已选择合并分支，请先“准备并合并”再打包；冲突会停止准备。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -326,22 +328,24 @@ struct PackageConfigurationView: View {
                     Toggle("临时 Worktree 中执行 pod install", isOn: $viewModel.installPods)
                 }
 
-                GridRow {
-                    fieldTitle("代码准备")
-                    HStack(spacing: 12) {
-                        if viewModel.isPreparing {
-                            ProgressView()
-                                .controlSize(.small)
-                            Button("停止准备", role: .destructive, action: viewModel.stopPreparing)
-                        } else {
-                            Button(viewModel.hasPreparedWorktree ? "重新准备" : "准备并合并",
-                                   action: viewModel.prepareBranches)
-                                .disabled(!viewModel.canPrepareBranches)
-                        }
-                        if viewModel.hasPreparedWorktree {
-                            Label("已准备完成，可开始打包", systemImage: "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.green)
+                if !viewModel.mergeBranches.isEmpty || viewModel.isPreparing {
+                    GridRow {
+                        fieldTitle("代码准备")
+                        HStack(spacing: 12) {
+                            if viewModel.isPreparing {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Button("停止准备", role: .destructive, action: viewModel.stopPreparing)
+                            } else {
+                                Button(viewModel.hasPreparedWorktree ? "重新准备" : "准备并合并",
+                                       action: viewModel.prepareBranches)
+                                    .disabled(!viewModel.canPrepareBranches)
+                            }
+                            if viewModel.hasPreparedWorktree {
+                                Label("已准备完成，可开始打包", systemImage: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            }
                         }
                     }
                 }
