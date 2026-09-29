@@ -143,7 +143,7 @@ struct PackageConfigurationView: View {
             Button(viewModel.isLoadingSchemes ? "读取中…" : "刷新") {
                 viewModel.refreshSchemes()
             }
-            .disabled(viewModel.containerPath.isEmpty || viewModel.isLoadingSchemes || viewModel.isPackaging)
+            .disabled(viewModel.containerPath.isEmpty || viewModel.isLoadingSchemes || viewModel.isPackaging || viewModel.isPreparing)
         }
     }
 
@@ -278,13 +278,72 @@ struct PackageConfigurationView: View {
                         Button(viewModel.isLoadingBranches ? "刷新中…" : "刷新") {
                             viewModel.refreshBranches()
                         }
-                        .disabled(viewModel.isLoadingBranches || viewModel.isPackaging)
+                        .disabled(viewModel.isLoadingBranches || viewModel.isPackaging || viewModel.isPreparing)
+                    }
+                }
+
+                GridRow {
+                    fieldTitle("合并分支")
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(viewModel.mergeBranches.enumerated()), id: \.element) { index, branch in
+                            HStack {
+                                Text("\(index + 1). \(branch)")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button("上移", systemImage: "arrow.up") {
+                                    viewModel.mergeBranches.swapAt(index, index - 1)
+                                }
+                                .disabled(index == 0 || viewModel.isPackaging || viewModel.isPreparing)
+                                Button("下移", systemImage: "arrow.down") {
+                                    viewModel.mergeBranches.swapAt(index, index + 1)
+                                }
+                                .disabled(index == viewModel.mergeBranches.count - 1 || viewModel.isPackaging || viewModel.isPreparing)
+                                Button("移除", systemImage: "minus.circle") {
+                                    viewModel.mergeBranches.remove(at: index)
+                                }
+                                .disabled(viewModel.isPackaging || viewModel.isPreparing)
+                            }
+                            .labelStyle(.iconOnly)
+                        }
+                        Menu("添加合并分支…") {
+                            ForEach(viewModel.remoteBranches.filter {
+                                $0 != viewModel.selectedBranch && !viewModel.mergeBranches.contains($0)
+                            }, id: \.self) { branch in
+                                Button(branch) { viewModel.mergeBranches.append(branch) }
+                            }
+                        }
+                        .disabled(viewModel.isPackaging || viewModel.isPreparing || viewModel.isLoadingBranches ||
+                            viewModel.remoteBranches.allSatisfy {
+                                $0 == viewModel.selectedBranch || viewModel.mergeBranches.contains($0)
+                            })
+                        Text("先点“准备并合并”，成功后再点“开始打包”；冲突会停止准备。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
                 GridRow {
                     fieldTitle("依赖")
                     Toggle("临时 Worktree 中执行 pod install", isOn: $viewModel.installPods)
+                }
+
+                GridRow {
+                    fieldTitle("代码准备")
+                    HStack(spacing: 12) {
+                        if viewModel.isPreparing {
+                            ProgressView()
+                                .controlSize(.small)
+                            Button("停止准备", role: .destructive, action: viewModel.stopPreparing)
+                        } else {
+                            Button(viewModel.hasPreparedWorktree ? "重新准备" : "准备并合并",
+                                   action: viewModel.prepareBranches)
+                                .disabled(!viewModel.canPrepareBranches)
+                        }
+                        if viewModel.hasPreparedWorktree {
+                            Label("已准备完成，可开始打包", systemImage: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                    }
                 }
             }
 
@@ -370,7 +429,7 @@ struct PackageConfigurationView: View {
                             showSigningSettings.toggle()
                             if showSigningSettings { viewModel.refreshSigningProfiles() }
                         }
-                        .disabled(viewModel.isPackaging)
+                        .disabled(viewModel.isPackaging || viewModel.isPreparing)
                     }
                 }
                 if showSigningSettings {

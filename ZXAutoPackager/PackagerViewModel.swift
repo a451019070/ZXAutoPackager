@@ -106,7 +106,10 @@ final class PackagerViewModel: ObservableObject {
     }
 
     @Published var containerPath = "" {
-        didSet { defaults.set(containerPath, forKey: Keys.containerPath) }
+        didSet {
+            defaults.set(containerPath, forKey: Keys.containerPath)
+            if containerPath != oldValue { discardPreparedWorktree() }
+        }
     }
     @Published var scheme = "" {
         didSet { defaults.set(scheme, forKey: Keys.scheme) }
@@ -155,13 +158,31 @@ final class PackagerViewModel: ObservableObject {
         didSet { defaults.set(feishuImageKey, forKey: Keys.feishuImageKey) }
     }
     @Published var useGitBranch = false {
-        didSet { defaults.set(useGitBranch, forKey: Keys.useGitBranch) }
+        didSet {
+            defaults.set(useGitBranch, forKey: Keys.useGitBranch)
+            if useGitBranch != oldValue { discardPreparedWorktree() }
+        }
     }
     @Published var selectedBranch = "" {
-        didSet { defaults.set(selectedBranch, forKey: Keys.selectedBranch) }
+        didSet {
+            defaults.set(selectedBranch, forKey: Keys.selectedBranch)
+            if selectedBranch != oldValue { discardPreparedWorktree() }
+            if mergeBranches.contains(selectedBranch) {
+                mergeBranches.removeAll { $0 == selectedBranch }
+            }
+        }
+    }
+    @Published var mergeBranches: [String] = [] {
+        didSet {
+            defaults.set(mergeBranches, forKey: Keys.mergeBranches)
+            if mergeBranches != oldValue { discardPreparedWorktree() }
+        }
     }
     @Published var installPods = true {
-        didSet { defaults.set(installPods, forKey: Keys.installPods) }
+        didSet {
+            defaults.set(installPods, forKey: Keys.installPods)
+            if installPods != oldValue { discardPreparedWorktree() }
+        }
     }
     @Published var provisioningProfileName: String?
     @Published var signingProfileUUID: String? {
@@ -178,6 +199,8 @@ final class PackagerViewModel: ObservableObject {
     @Published var isLoadingBranches = false
     @Published var isLoadingPgyerBuildNumber = false
     @Published var isPackaging = false
+    @Published private(set) var isPreparing = false
+    @Published private(set) var hasPreparedWorktree = false
     @Published var elapsedSeconds = 0
     @Published var statusMessage = "请选择工程和导出目录"
     @Published var log = ""
@@ -205,6 +228,8 @@ final class PackagerViewModel: ObservableObject {
         static let feishuImageKey = "ZXAutoPackager.feishuImageKey"
         static let useGitBranch = "ZXAutoPackager.useGitBranch"
         static let selectedBranch = "ZXAutoPackager.selectedBranch"
+        static let mergeBranches = "ZXAutoPackager.mergeBranches"
+        static let mergeBranch = "ZXAutoPackager.mergeBranch"
         static let installPods = "ZXAutoPackager.installPods"
         static let signingProfileUUID = "ZXAutoPackager.signingProfileUUID"
         static let lastSuccessfulBuild = "ZXAutoPackager.lastSuccessfulBuild"
@@ -215,6 +240,21 @@ final class PackagerViewModel: ObservableObject {
     private var logRefreshTask: Task<Void, Never>?
     private var elapsedTimeTask: Task<Void, Never>?
     private var packageTask: Task<Void, Never>?
+    private var preparationTask: Task<Void, Never>?
+    private var preparedWorktree: GitWorktreeContext?
+    private var preparedConfiguration: PreparationConfiguration?
+
+    private struct PreparationConfiguration: Equatable {
+        let projectPath: String
+        let branch: String
+        let mergeBranches: [String]
+        let installPods: Bool
+    }
+
+    private var currentPreparationConfiguration: PreparationConfiguration {
+        PreparationConfiguration(projectPath: containerPath, branch: selectedBranch,
+                                 mergeBranches: mergeBranches, installPods: installPods)
+    }
     private var cancellationController: BuildCancellationController?
     private var schemeLookupID = UUID()
     private var signingLookupID = UUID()
@@ -223,7 +263,9 @@ final class PackagerViewModel: ObservableObject {
         logRefreshTask?.cancel()
         elapsedTimeTask?.cancel()
         packageTask?.cancel()
+        preparationTask?.cancel()
         cancellationController?.cancel()
+        if let preparedWorktree { GitWorktreeManager.cleanup(preparedWorktree) }
     }
 
     init() {
@@ -247,6 +289,16 @@ final class PackagerViewModel: ObservableObject {
         defaults.removeObject(forKey: "ZXAutoPackager.updateDescription")
         useGitBranch = defaults.bool(forKey: Keys.useGitBranch)
         selectedBranch = defaults.string(forKey: Keys.selectedBranch) ?? ""
+        if let saved = defaults.stringArray(forKey: Keys.mergeBranches) {
+            mergeBranches = saved
+        } else if let legacy = defaults.string(forKey: Keys.mergeBranch), !legacy.isEmpty {
+            mergeBranches = [legacy]
+        }
+        defaults.removeObject(forKey: Keys.mergeBranch)
+        var seenBranches = Set<String>()
+        mergeBranches = mergeBranches.filter {
+            !$0.isEmpty && $0 != selectedBranch && seenBranches.insert($0).inserted
+        }
         installPods = defaults.object(forKey: Keys.installPods) == nil
             ? true
             : defaults.bool(forKey: Keys.installPods)
@@ -266,6 +318,107 @@ final class PackagerViewModel: ObservableObject {
         }
     }
 
+    var canPrepareBranches: Bool {
+        useGitBranch && !isPreparing && !isPackaging && !isLoadingBranches &&
+        !containerPath.isEmpty && !selectedBranch.isEmpty &&
+        remoteBranches.contains(selectedBranch) &&
+        mergeBranches.allSatisfy { remoteBranches.contains($0) }
+    }
+
+    private var preparedWorktreeIsCurrent: Bool {
+        guard let preparedWorktree, preparedConfiguration == currentPreparationConfiguration else { return false }
+        return FileManager.default.fileExists(atPath: preparedWorktree.projectDirectory.path)
+    }
+
+    private func discardPreparedWorktree() {
+        guard !isPackaging else { return }
+        if isPreparing {
+            cancellationController?.cancel()
+            preparationTask?.cancel()
+            return
+        }
+        if let preparedWorktree {
+            self.preparedWorktree = nil
+            preparedConfiguration = nil
+            hasPreparedWorktree = false
+            Task.detached(priority: .utility) {
+                GitWorktreeManager.cleanup(preparedWorktree)
+            }
+            statusMessage = "分支配置已变化，请重新准备并合并"
+        }
+    }
+
+    func prepareBranches() {
+        guard canPrepareBranches else { return }
+        discardPreparedWorktree()
+        guard let projectAccess = restoreAccess(
+            bookmarkKey: Keys.projectBookmark,
+            fallbackPath: containerPath,
+            directoryName: "项目目录"
+        ) else { return }
+
+        let configuration = currentPreparationConfiguration
+        let cancellation = BuildCancellationController()
+        cancellationController = cancellation
+        isPreparing = true
+        hasPreparedWorktree = false
+        statusMessage = "正在准备并合并分支…"
+        log = ""
+        let logBuffer = BuildLogBuffer()
+        startLogRefresh(from: logBuffer)
+        preparationTask = Task.detached(priority: .userInitiated) {
+            defer { projectAccess.stop() }
+            do {
+                let context = try GitWorktreeManager.prepare(
+                    projectPath: projectAccess.url.path,
+                    branch: configuration.branch,
+                    mergeBranches: configuration.mergeBranches,
+                    installPods: configuration.installPods,
+                    cancellation: cancellation
+                ) { chunk in logBuffer.append(chunk) }
+                let accepted = await MainActor.run {
+                    let accepted = !cancellation.isCancelled &&
+                        self.currentPreparationConfiguration == configuration
+                    if accepted {
+                        self.preparedWorktree = context
+                        self.preparedConfiguration = configuration
+                        self.hasPreparedWorktree = true
+                        self.finishLogRefresh(from: logBuffer)
+                        self.statusMessage = "分支已准备并合并完成，可以开始打包"
+                    } else {
+                        self.finishLogRefresh(from: logBuffer)
+                        self.statusMessage = "准备已取消或分支配置已变化，请重新准备"
+                    }
+                    self.isPreparing = false
+                    self.preparationTask = nil
+                    self.cancellationController = nil
+                    return accepted
+                }
+                if !accepted { GitWorktreeManager.cleanup(context) }
+            } catch {
+                await MainActor.run {
+                    self.finishLogRefresh(from: logBuffer)
+                    self.isPreparing = false
+                    self.preparationTask = nil
+                    self.cancellationController = nil
+                    if error is CancellationError || cancellation.isCancelled {
+                        self.statusMessage = "准备已停止"
+                    } else {
+                        self.appendLog("\n===== 准备失败 =====\n\(error.localizedDescription)\n")
+                        self.statusMessage = error.localizedDescription
+                    }
+                }
+            }
+        }
+    }
+
+    func stopPreparing() {
+        guard isPreparing else { return }
+        statusMessage = "正在停止准备…"
+        cancellationController?.cancel()
+        preparationTask?.cancel()
+    }
+
     var canPackage: Bool {
         let trimmedVersion = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -273,6 +426,7 @@ final class PackagerViewModel: ObservableObject {
         let buildCanResolve = usePgyerBuildNumber || trimmedBuild.isEmpty || Int(trimmedBuild).map { $0 > 0 } == true
 
         return         !isPackaging &&
+        !isPreparing &&
         !isLoadingSchemes &&
         !isLoadingPgyerBuildNumber &&
         !containerPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -284,7 +438,7 @@ final class PackagerViewModel: ObservableObject {
         !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (!(uploadToPgyer || usePgyerBuildNumber) || hasPgyerAPIKey) &&
         (!usePgyerBuildNumber || hasPgyerAppKey) &&
-        (!useGitBranch || !selectedBranch.isEmpty) &&
+        (!useGitBranch || preparedWorktreeIsCurrent) &&
         (!sendToFeishu || FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) != nil)
     }
 
@@ -303,6 +457,7 @@ final class PackagerViewModel: ObservableObject {
             return "请填写有效的 Build 号"
         }
         if useGitBranch && selectedBranch.isEmpty { return "请在高级选项中选择远程分支" }
+        if useGitBranch && !preparedWorktreeIsCurrent { return "请先准备并合并分支，再开始打包" }
         if (uploadToPgyer || usePgyerBuildNumber) && !hasPgyerAPIKey { return "请填写蒲公英 API Key" }
         if usePgyerBuildNumber && !hasPgyerAppKey { return "请填写蒲公英 App Key" }
         if sendToFeishu && FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) == nil { return "请填写有效的飞书机器人 Webhook" }
@@ -377,7 +532,7 @@ final class PackagerViewModel: ObservableObject {
     }
 
     func refreshBranches(fetchRemote: Bool = true) {
-        guard !containerPath.isEmpty, !isLoadingBranches, !isPackaging else { return }
+        guard !containerPath.isEmpty, !isLoadingBranches, !isPackaging, !isPreparing else { return }
         guard let projectAccess = restoreAccess(
             bookmarkKey: Keys.projectBookmark,
             fallbackPath: containerPath,
@@ -386,6 +541,7 @@ final class PackagerViewModel: ObservableObject {
             return
         }
 
+        if fetchRemote { discardPreparedWorktree() }
         isLoadingBranches = true
         statusMessage = fetchRemote ? "正在刷新远程分支…" : "正在读取远程分支…"
         let projectPath = projectAccess.url.path
@@ -401,6 +557,12 @@ final class PackagerViewModel: ObservableObject {
                     self.remoteBranches = branches
                     if !branches.contains(self.selectedBranch) {
                         self.selectedBranch = branches.first ?? ""
+                    }
+                    let validMergeBranches = self.mergeBranches.filter {
+                        branches.contains($0) && $0 != self.selectedBranch
+                    }
+                    if validMergeBranches != self.mergeBranches {
+                        self.mergeBranches = validMergeBranches
                     }
                     self.isLoadingBranches = false
                     self.statusMessage = "已读取 \(branches.count) 个远程分支"
@@ -475,6 +637,7 @@ final class PackagerViewModel: ObservableObject {
             buildNumber = ""
             remoteBranches = []
             selectedBranch = ""
+            mergeBranches = []
         }
         refreshSchemes()
         if useGitBranch {
@@ -640,8 +803,10 @@ final class PackagerViewModel: ObservableObject {
         let shouldUploadToPgyer = uploadToPgyer
         let shouldUsePgyerBuildNumber = usePgyerBuildNumber
         let shouldUseGitBranch = useGitBranch
-        let branchToBuild = selectedBranch
-        let shouldInstallPods = installPods
+        let worktreeContext = preparedWorktree
+        preparedWorktree = nil
+        preparedConfiguration = nil
+        hasPreparedWorktree = false
         let apiKey = pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let appKey = pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let updateDescription = updateDescription.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -667,7 +832,6 @@ final class PackagerViewModel: ObservableObject {
         let cancellation = BuildCancellationController()
         cancellationController = cancellation
         packageTask = Task.detached(priority: .userInitiated) {
-            var worktreeContext: GitWorktreeContext?
             defer {
                 if let worktreeContext {
                     GitWorktreeManager.cleanup(worktreeContext)
@@ -677,18 +841,9 @@ final class PackagerViewModel: ObservableObject {
             }
 
             do {
-                var effectiveProjectPath = projectAccess.url.path
+                let effectiveProjectPath = worktreeContext?.projectDirectory.path ?? projectAccess.url.path
                 if shouldUseGitBranch {
-                    let context = try GitWorktreeManager.prepare(
-                        projectPath: effectiveProjectPath,
-                        branch: branchToBuild,
-                        installPods: shouldInstallPods,
-                        cancellation: cancellation
-                    ) { chunk in
-                        logBuffer.append(chunk)
-                    }
-                    worktreeContext = context
-                    effectiveProjectPath = context.projectDirectory.path
+                    logBuffer.append("===== 使用已准备并合并的临时 Worktree =====\n")
                 }
 
                 var resolvedVersion = enteredVersion

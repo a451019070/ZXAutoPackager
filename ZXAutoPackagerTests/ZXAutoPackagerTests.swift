@@ -256,4 +256,95 @@ struct ZXAutoPackagerTests {
 
         #expect(PgyerUploader.maximumBuildNumber(in: records, matching: "1.0") == nil)
     }
+
+    @Test func mergesAnotherBranchOnlyInTemporaryWorktree() throws {
+        let root = try makeMergeRepository(conflicting: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try git(["checkout", "-q", "base"], at: root)
+        let context = try GitWorktreeManager.prepare(
+            projectPath: root.path, branch: "base", mergeBranches: ["feature"],
+            installPods: false, cancellation: BuildCancellationController(), onOutput: { _ in }
+        )
+        defer { GitWorktreeManager.cleanup(context) }
+
+        #expect(try String(contentsOf: context.projectDirectory.appendingPathComponent("feature.txt"), encoding: .utf8) == "feature")
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("feature.txt").path))
+        #expect(try String(contentsOf: context.projectDirectory.appendingPathComponent("base.txt"), encoding: .utf8) == "base")
+    }
+
+    @Test func mergesMultipleBranchesInSelectedOrder() throws {
+        let root = try makeMergeRepository(conflicting: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try git(["checkout", "-q", "base"], at: root)
+        _ = try git(["checkout", "-qb", "second"], at: root)
+        try "second".write(to: root.appendingPathComponent("second.txt"), atomically: true, encoding: .utf8)
+        _ = try git(["add", "."], at: root)
+        _ = try git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "second"], at: root)
+        _ = try git(["update-ref", "refs/remotes/origin/second", "HEAD"], at: root)
+        let context = try GitWorktreeManager.prepare(
+            projectPath: root.path, branch: "base", mergeBranches: ["second", "feature"],
+            installPods: false, cancellation: BuildCancellationController(), onOutput: { _ in }
+        )
+        defer { GitWorktreeManager.cleanup(context) }
+
+        let commits = try git(["log", "-2", "--format=%s"], at: context.worktreeRoot)
+        #expect(commits.split(separator: "\n").map(String.init) == [
+            "Merge remote-tracking branch 'refs/remotes/origin/feature' into HEAD",
+            "Merge remote-tracking branch 'refs/remotes/origin/second' into HEAD"
+        ])
+        #expect(FileManager.default.fileExists(atPath: context.projectDirectory.appendingPathComponent("feature.txt").path))
+        #expect(FileManager.default.fileExists(atPath: context.projectDirectory.appendingPathComponent("second.txt").path))
+    }
+
+    @Test func mergeConflictStopsAndCleansTemporaryWorktree() throws {
+        let root = try makeMergeRepository(conflicting: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        do {
+            _ = try GitWorktreeManager.prepare(
+                projectPath: root.path, branch: "base", mergeBranches: ["feature"],
+                installPods: false, cancellation: BuildCancellationController(), onOutput: { _ in }
+            )
+            Issue.record("发生冲突时应停止准备")
+        } catch GitPreparationError.mergeConflict(let branch, let output) {
+            #expect(branch == "feature")
+            #expect(output.contains("CONFLICT"))
+        }
+        let worktrees = try git(["worktree", "list", "--porcelain"], at: root)
+        #expect(worktrees.components(separatedBy: "worktree ").count == 2)
+    }
+
+    private func makeMergeRepository(conflicting: Bool) throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("MergeTest-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        _ = try git(["init", "-q"], at: root)
+        try "initial".write(to: root.appendingPathComponent("shared.txt"), atomically: true, encoding: .utf8)
+        _ = try git(["add", "."], at: root)
+        _ = try git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"], at: root)
+        _ = try git(["checkout", "-qb", "base"], at: root)
+        try "base".write(to: root.appendingPathComponent(conflicting ? "shared.txt" : "base.txt"), atomically: true, encoding: .utf8)
+        _ = try git(["add", "."], at: root)
+        _ = try git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "base"], at: root)
+        _ = try git(["update-ref", "refs/remotes/origin/base", "HEAD"], at: root)
+        _ = try git(["checkout", "-q", "HEAD~1"], at: root)
+        _ = try git(["checkout", "-qb", "feature"], at: root)
+        try "feature".write(to: root.appendingPathComponent(conflicting ? "shared.txt" : "feature.txt"), atomically: true, encoding: .utf8)
+        _ = try git(["add", "."], at: root)
+        _ = try git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "feature"], at: root)
+        _ = try git(["update-ref", "refs/remotes/origin/feature", "HEAD"], at: root)
+        return root
+    }
+
+    private func git(_ arguments: [String], at root: URL) throws -> String {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", root.path] + arguments
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw GitPreparationError.commandFailed("git \(arguments.joined(separator: " "))", process.terminationStatus, text) }
+        return text
+    }
 }

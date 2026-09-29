@@ -11,7 +11,7 @@ struct PackageView: View {
                 VStack(spacing: 18) {
                     PackageConfigurationView(viewModel: viewModel)
                     PackageStatusView(viewModel: viewModel)
-                    if viewModel.isPackaging || !viewModel.log.isEmpty {
+                    if viewModel.isPackaging || viewModel.isPreparing || !viewModel.log.isEmpty {
                         PackageLogView(log: viewModel.log)
                     } else {
                         Label("尚未开始打包，运行后将在这里显示构建进度", systemImage: "clock")

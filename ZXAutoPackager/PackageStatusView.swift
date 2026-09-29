@@ -11,7 +11,6 @@ struct PackageStatusView: View {
                 Spacer(minLength: 8)
                 actionButtons
             }
-            .fixedSize(horizontal: true, vertical: false)
 
             VStack(alignment: .leading, spacing: 14) {
                 statusContent
@@ -33,7 +32,11 @@ struct PackageStatusView: View {
                 Text(viewModel.statusMessage == "请选择工程和导出目录" || viewModel.statusMessage == "已恢复上次填写的打包配置"
                      ? viewModel.configurationHint : viewModel.statusMessage)
                     .lineLimit(2)
-                if viewModel.isPackaging {
+                if viewModel.isPreparing {
+                    Text("正在准备临时 Worktree…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if viewModel.isPackaging {
                     Text("进程运行中 · 已用时 \(viewModel.elapsedTimeText)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -109,7 +112,7 @@ struct PackageStatusView: View {
 
     @ViewBuilder
     private var statusIcon: some View {
-        if viewModel.isPackaging {
+        if viewModel.isPackaging || viewModel.isPreparing {
             ProgressView()
                 .controlSize(.small)
         } else {

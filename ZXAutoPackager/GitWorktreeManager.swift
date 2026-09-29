@@ -11,6 +11,7 @@ enum GitPreparationError: LocalizedError {
     case invalidRepository
     case invalidProjectPath
     case noRemoteBranches
+    case mergeConflict(String, String)
     case podfileNotFound
     case cancelled
 
@@ -24,6 +25,8 @@ enum GitPreparationError: LocalizedError {
             return "无法确定项目相对于 Git 仓库的位置。"
         case .noRemoteBranches:
             return "没有找到 origin 远程分支。"
+        case .mergeConflict(let branch, let output):
+            return "合并 origin/\(branch) 时发生冲突，已停止打包并清理临时 Worktree。\n\(output)"
         case .podfileNotFound:
             return "临时项目目录中没有找到 Podfile。"
         case .cancelled:
@@ -75,6 +78,7 @@ nonisolated enum GitWorktreeManager {
     static func prepare(
         projectPath: String,
         branch: String,
+        mergeBranches: [String],
         installPods: Bool,
         cancellation: BuildCancellationController,
         onOutput: @escaping @Sendable (String) -> Void
@@ -95,6 +99,10 @@ nonisolated enum GitWorktreeManager {
         )
         let worktreeRoot = temporaryParent
             .appendingPathComponent("\(root.lastPathComponent)-\(UUID().uuidString)", isDirectory: true)
+        var prepared = false
+        defer {
+            if !prepared { cleanup(repositoryRoot: root, worktreeRoot: worktreeRoot) }
+        }
 
         onOutput("===== 准备分支代码 =====\n")
         onOutput("创建独立 Worktree：origin/\(branch)\n")
@@ -109,11 +117,9 @@ nonisolated enum GitWorktreeManager {
             cancellation: cancellation
         )
         guard !cancellation.isCancelled else {
-            cleanup(repositoryRoot: root, worktreeRoot: worktreeRoot)
             throw GitPreparationError.cancelled
         }
         guard worktreeResult.status == 0 else {
-            cleanup(repositoryRoot: root, worktreeRoot: worktreeRoot)
             throw GitPreparationError.commandFailed(
                 "git worktree add --detach origin/\(branch)",
                 worktreeResult.status,
@@ -125,10 +131,42 @@ nonisolated enum GitWorktreeManager {
             ? worktreeRoot
             : worktreeRoot.appendingPathComponent(relativeProjectPath, isDirectory: true)
 
+        var merged = Set<String>()
+        for (index, mergeBranch) in mergeBranches.enumerated() {
+            guard !mergeBranch.isEmpty, mergeBranch != branch, merged.insert(mergeBranch).inserted else {
+                throw GitPreparationError.commandFailed("合并远程分支", 1, "待合并分支不能为空、重复或与打包分支相同。")
+            }
+            guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
+            onOutput("合并第 \(index + 1)/\(mergeBranches.count) 个分支：origin/\(mergeBranch)…\n")
+            let mergeResult = try run(
+                executable: "/usr/bin/git",
+                arguments: [
+                    "-C", worktreeRoot.path,
+                    "-c", "user.name=ZXAutoPackager", "-c", "user.email=zxautopackager@localhost",
+                    "-c", "commit.gpgsign=false",
+                    "merge", "--no-edit", "--no-ff", "refs/remotes/origin/\(mergeBranch)"
+                ],
+                cancellation: cancellation
+            )
+            guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
+            guard mergeResult.status == 0 else {
+                let conflicts = try run(
+                    executable: "/usr/bin/git",
+                    arguments: ["-C", worktreeRoot.path, "diff", "--name-only", "--diff-filter=U"]
+                )
+                if conflicts.status == 0 && !conflicts.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    throw GitPreparationError.mergeConflict(mergeBranch, mergeResult.output)
+                }
+                throw GitPreparationError.commandFailed(
+                    "git merge origin/\(mergeBranch)", mergeResult.status, mergeResult.output
+                )
+            }
+            onOutput("origin/\(mergeBranch) 合并完成（提交仅保存在临时 Worktree）。\n")
+        }
+
         if installPods {
             let podfileURL = temporaryProjectURL.appendingPathComponent("Podfile")
             guard FileManager.default.fileExists(atPath: podfileURL.path) else {
-                cleanup(repositoryRoot: root, worktreeRoot: worktreeRoot)
                 throw GitPreparationError.podfileNotFound
             }
 
@@ -136,7 +174,6 @@ nonisolated enum GitWorktreeManager {
             guard let podExecutable = searchPaths
                 .map({ URL(fileURLWithPath: $0).appendingPathComponent("pod").path })
                 .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-                cleanup(repositoryRoot: root, worktreeRoot: worktreeRoot)
                 throw GitPreparationError.commandFailed(
                     "pod install",
                     127,
@@ -153,16 +190,16 @@ nonisolated enum GitWorktreeManager {
                 cancellation: cancellation
             )
             guard !cancellation.isCancelled else {
-                cleanup(repositoryRoot: root, worktreeRoot: worktreeRoot)
                 throw GitPreparationError.cancelled
             }
             guard podResult.status == 0 else {
-                cleanup(repositoryRoot: root, worktreeRoot: worktreeRoot)
                 throw GitPreparationError.commandFailed("pod install", podResult.status, podResult.output)
             }
             onOutput("Pods 安装完成。\n")
         }
 
+        guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
+        prepared = true
         return GitWorktreeContext(
             repositoryRoot: root,
             worktreeRoot: worktreeRoot,
