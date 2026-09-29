@@ -334,21 +334,36 @@ struct ZXAutoPackagerTests {
         #expect(FileManager.default.fileExists(atPath: context.projectDirectory.appendingPathComponent("second.txt").path))
     }
 
-    @Test func mergeConflictStopsAndCleansTemporaryWorktree() throws {
+    @Test func mergeConflictCanBeResolvedAndContinued() throws {
         let root = try makeMergeRepository(conflicting: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        let conflict: GitMergeConflict
         do {
             _ = try GitWorktreeManager.prepare(
                 projectPath: root.path, branch: "base", mergeBranches: ["feature"],
                 installPods: false, cancellation: BuildCancellationController(), onOutput: { _ in }
             )
-            Issue.record("发生冲突时应停止准备")
-        } catch GitPreparationError.mergeConflict(let branch, let output) {
-            #expect(branch == "feature")
-            #expect(output.contains("CONFLICT"))
+            Issue.record("发生冲突时应暂停准备")
+            return
+        } catch let error as GitMergeConflict {
+            conflict = error
         }
-        let worktrees = try git(["worktree", "list", "--porcelain"], at: root)
-        #expect(worktrees.components(separatedBy: "worktree ").count == 2)
+        defer { GitWorktreeManager.cleanup(conflict.context) }
+        #expect(conflict.branch == "feature")
+        #expect(conflict.files == ["shared.txt"])
+        #expect(FileManager.default.fileExists(atPath: conflict.context.worktreeRoot.path))
+        #expect(throws: GitPreparationError.self) {
+            try GitWorktreeManager.continueMerge(conflict: conflict, remainingBranches: [], installPods: false,
+                                                  cancellation: BuildCancellationController(), onOutput: { _ in })
+        }
+        try "resolved".write(to: conflict.context.worktreeRoot.appendingPathComponent("shared.txt"), atomically: true, encoding: .utf8)
+        _ = try git(["add", "shared.txt"], at: conflict.context.worktreeRoot)
+        let context = try GitWorktreeManager.continueMerge(
+            conflict: conflict, remainingBranches: [], installPods: false,
+            cancellation: BuildCancellationController(), onOutput: { _ in }
+        )
+        #expect(try String(contentsOf: context.worktreeRoot.appendingPathComponent("shared.txt"), encoding: .utf8) == "resolved")
+        #expect(try git(["log", "-1", "--format=%s"], at: context.worktreeRoot).contains("Merge"))
     }
 
     private func makeMergeRepository(conflicting: Bool) throws -> URL {

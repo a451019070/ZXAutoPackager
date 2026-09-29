@@ -271,7 +271,7 @@ final class PackagerViewModel: ObservableObject {
         preparationTask?.cancel()
         cancellationController?.cancel()
         if let preparedWorktree { GitWorktreeManager.cleanup(preparedWorktree) }
-        if let pausedMerge { GitWorktreeManager.cleanup(pausedMerge.context) }
+
     }
 
     init() {
@@ -341,7 +341,7 @@ final class PackagerViewModel: ObservableObject {
             return
         }
         if pausedMerge != nil {
-            statusMessage = "冲突现场尚未放弃，请先解决冲突或点击放弃并清理"
+            statusMessage = "冲突现场仍保留在临时 Worktree；请先继续合并或点击放弃并清理"
             return
         }
         if let preparedWorktree {
@@ -414,7 +414,7 @@ final class PackagerViewModel: ObservableObject {
                         self.preparedConfiguration = configuration
                         self.mergeConflictBranch = conflict.branch
                         self.mergeConflictFiles = conflict.files
-                        self.appendLog("\n===== 合并冲突：origin/\(conflict.branch) =====\n\(conflict.output)\n")
+                        self.appendLog("\n===== 合并冲突：origin/\(conflict.branch) =====\n临时 Worktree：\(conflict.context.worktreeRoot.path)\n\(conflict.output)\n")
                         self.statusMessage = "合并冲突已暂停，请在临时 Worktree 中解决后检查并继续"
                     }
                     return accepted
@@ -490,7 +490,7 @@ final class PackagerViewModel: ObservableObject {
                     self.isPreparing = false
                     self.preparationTask = nil
                     self.cancellationController = nil
-                    self.appendLog("\n===== 合并冲突：origin/\(nextConflict.branch) =====\n\(nextConflict.output)\n")
+                    self.appendLog("\n===== 合并冲突：origin/\(nextConflict.branch) =====\n临时 Worktree：\(nextConflict.context.worktreeRoot.path)\n\(nextConflict.output)\n")
                     self.statusMessage = "后续分支再次冲突，请解决后继续"
                 }
             } catch {
@@ -512,6 +512,10 @@ final class PackagerViewModel: ObservableObject {
 
     func stopPreparing() {
         guard isPreparing else { return }
+        guard pausedMerge == nil else {
+            statusMessage = "正在完成当前合并步骤，请稍候再操作"
+            return
+        }
         statusMessage = "正在停止准备…"
         cancellationController?.cancel()
         preparationTask?.cancel()
@@ -634,7 +638,7 @@ final class PackagerViewModel: ObservableObject {
     }
 
     func refreshBranches(fetchRemote: Bool = true) {
-        guard !containerPath.isEmpty, !isLoadingBranches, !isPackaging, !isPreparing else { return }
+        guard !containerPath.isEmpty, !isLoadingBranches, !isPackaging, !isPreparing, pausedMerge == nil else { return }
         guard let projectAccess = restoreAccess(
             bookmarkKey: Keys.projectBookmark,
             fallbackPath: containerPath,
@@ -718,6 +722,10 @@ final class PackagerViewModel: ObservableObject {
     }
 
     func chooseProject() {
+        guard pausedMerge == nil else {
+            statusMessage = "请先解决冲突或放弃并清理，再切换项目"
+            return
+        }
         let panel = NSOpenPanel()
         panel.title = "选择 Xcode 项目文件夹"
         panel.message = "请选择包含 .xcworkspace 或 .xcodeproj 的项目根目录"
@@ -1224,12 +1232,12 @@ final class PackagerViewModel: ObservableObject {
         }
 
         sections.append("""
-        上传人：\(uploader)
-        上传时间：\(formatter.string(from: uploadedAt))
+        构建环境：\(packageResult.configuration)
         Version：\(packageResult.versionNumber)
         Build：\(packageResult.buildNumber)
         User：\(user)
-        构建环境：\(packageResult.configuration)
+        上传人：\(uploader)
+        上传时间：\(formatter.string(from: uploadedAt))
         """)
         return sections.joined(separator: "\n\n")
     }
