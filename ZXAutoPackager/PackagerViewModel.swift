@@ -200,6 +200,8 @@ final class PackagerViewModel: ObservableObject {
     @Published var isPackaging = false
     @Published private(set) var isPreparing = false
     @Published private(set) var hasPreparedWorktree = false
+    @Published private(set) var mergeConflictFiles: [String] = []
+    @Published private(set) var mergeConflictBranch: String?
     @Published var elapsedSeconds = 0
     @Published var statusMessage = "请选择工程和导出目录"
     @Published var log = ""
@@ -244,6 +246,7 @@ final class PackagerViewModel: ObservableObject {
     private var packageTask: Task<Void, Never>?
     private var preparationTask: Task<Void, Never>?
     private var preparedWorktree: GitWorktreeContext?
+    private var pausedMerge: GitMergeConflict?
     private var preparedConfiguration: PreparationConfiguration?
 
     private struct PreparationConfiguration: Equatable {
@@ -268,6 +271,7 @@ final class PackagerViewModel: ObservableObject {
         preparationTask?.cancel()
         cancellationController?.cancel()
         if let preparedWorktree { GitWorktreeManager.cleanup(preparedWorktree) }
+        if let pausedMerge { GitWorktreeManager.cleanup(pausedMerge.context) }
     }
 
     init() {
@@ -336,6 +340,10 @@ final class PackagerViewModel: ObservableObject {
             preparationTask?.cancel()
             return
         }
+        if pausedMerge != nil {
+            statusMessage = "冲突现场尚未放弃，请先解决冲突或点击放弃并清理"
+            return
+        }
         if let preparedWorktree {
             self.preparedWorktree = nil
             preparedConfiguration = nil
@@ -348,7 +356,7 @@ final class PackagerViewModel: ObservableObject {
     }
 
     func prepareBranches() {
-        guard canPrepareBranches else { return }
+        guard pausedMerge == nil, canPrepareBranches else { return }
         discardPreparedWorktree()
         guard let projectAccess = restoreAccess(
             bookmarkKey: Keys.projectBookmark,
@@ -394,6 +402,24 @@ final class PackagerViewModel: ObservableObject {
                     return accepted
                 }
                 if !accepted { GitWorktreeManager.cleanup(context) }
+            } catch let conflict as GitMergeConflict {
+                let accepted = await MainActor.run {
+                    let accepted = !cancellation.isCancelled && self.currentPreparationConfiguration == configuration
+                    self.finishLogRefresh(from: logBuffer)
+                    self.isPreparing = false
+                    self.preparationTask = nil
+                    self.cancellationController = nil
+                    if accepted {
+                        self.pausedMerge = conflict
+                        self.preparedConfiguration = configuration
+                        self.mergeConflictBranch = conflict.branch
+                        self.mergeConflictFiles = conflict.files
+                        self.appendLog("\n===== 合并冲突：origin/\(conflict.branch) =====\n\(conflict.output)\n")
+                        self.statusMessage = "合并冲突已暂停，请在临时 Worktree 中解决后检查并继续"
+                    }
+                    return accepted
+                }
+                if !accepted { GitWorktreeManager.cleanup(conflict.context) }
             } catch {
                 await MainActor.run {
                     self.finishLogRefresh(from: logBuffer)
@@ -406,6 +432,79 @@ final class PackagerViewModel: ObservableObject {
                         self.appendLog("\n===== 准备失败 =====\n\(error.localizedDescription)\n")
                         self.statusMessage = error.localizedDescription
                     }
+                }
+            }
+        }
+    }
+
+    func openConflictWorktree() {
+        guard let pausedMerge else { return }
+        NSWorkspace.shared.open(pausedMerge.context.worktreeRoot)
+    }
+
+    func discardMergeConflict() {
+        guard !isPreparing, !isPackaging, let pausedMerge else { return }
+        self.pausedMerge = nil
+        self.preparedConfiguration = nil
+        mergeConflictBranch = nil
+        mergeConflictFiles = []
+        statusMessage = "已放弃冲突合并，正在清理临时 Worktree"
+        Task.detached(priority: .utility) { GitWorktreeManager.cleanup(pausedMerge.context) }
+    }
+
+    func continueMerge() {
+        guard !isPreparing, !isPackaging, let conflict = pausedMerge,
+              preparedConfiguration == currentPreparationConfiguration else { return }
+        let configuration = currentPreparationConfiguration
+        let cancellation = BuildCancellationController()
+        cancellationController = cancellation
+        isPreparing = true
+        statusMessage = "正在检查冲突并继续合并…"
+        let logBuffer = BuildLogBuffer()
+        startLogRefresh(from: logBuffer)
+        preparationTask = Task.detached(priority: .userInitiated) {
+            do {
+                let context = try GitWorktreeManager.continueMerge(
+                    conflict: conflict,
+                    remainingBranches: Array(configuration.mergeBranches.dropFirst(conflict.nextIndex)),
+                    installPods: configuration.installPods, cancellation: cancellation
+                ) { chunk in logBuffer.append(chunk) }
+                await MainActor.run {
+                    self.finishLogRefresh(from: logBuffer)
+                    self.pausedMerge = nil
+                    self.mergeConflictBranch = nil
+                    self.mergeConflictFiles = []
+                    self.preparedWorktree = context
+                    self.hasPreparedWorktree = true
+                    self.isPreparing = false
+                    self.preparationTask = nil
+                    self.cancellationController = nil
+                    self.statusMessage = "冲突已解决，分支已合并完成，可以开始打包"
+                }
+            } catch let nextConflict as GitMergeConflict {
+                await MainActor.run {
+                    self.finishLogRefresh(from: logBuffer)
+                    self.pausedMerge = nextConflict
+                    self.mergeConflictBranch = nextConflict.branch
+                    self.mergeConflictFiles = nextConflict.files
+                    self.isPreparing = false
+                    self.preparationTask = nil
+                    self.cancellationController = nil
+                    self.appendLog("\n===== 合并冲突：origin/\(nextConflict.branch) =====\n\(nextConflict.output)\n")
+                    self.statusMessage = "后续分支再次冲突，请解决后继续"
+                }
+            } catch {
+                await MainActor.run {
+                    self.finishLogRefresh(from: logBuffer)
+                    self.isPreparing = false
+                    self.preparationTask = nil
+                    self.cancellationController = nil
+                    if let gitError = error as? GitPreparationError,
+                       case .unresolvedConflicts(let files) = gitError {
+                        self.mergeConflictFiles = files
+                    }
+                    self.statusMessage = error.localizedDescription
+                    self.appendLog("\n===== 检查未通过 =====\n\(error.localizedDescription)\n")
                 }
             }
         }
@@ -437,6 +536,7 @@ final class PackagerViewModel: ObservableObject {
         !outputDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (!(uploadToPgyer || usePgyerBuildNumber) || hasPgyerAPIKey) &&
         (!usePgyerBuildNumber || hasPgyerAppKey) &&
+        pausedMerge == nil &&
         (!useGitBranch || (!selectedBranch.isEmpty && (mergeBranches.isEmpty || preparedWorktreeIsCurrent))) &&
         (!sendToFeishu || FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) != nil)
     }
@@ -455,6 +555,7 @@ final class PackagerViewModel: ObservableObject {
         if !usePgyerBuildNumber && !trimmedBuild.isEmpty && Int(trimmedBuild).map({ $0 > 0 }) != true {
             return "请填写有效的 Build 号"
         }
+        if pausedMerge != nil { return "请先解决冲突并继续合并，或放弃并清理" }
         if useGitBranch && selectedBranch.isEmpty { return "请在高级选项中选择远程分支" }
         if useGitBranch && !mergeBranches.isEmpty && !preparedWorktreeIsCurrent {
             return "已选择合并分支，请先准备并合并后再打包"

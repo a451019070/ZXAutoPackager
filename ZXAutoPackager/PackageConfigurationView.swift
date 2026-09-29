@@ -252,6 +252,7 @@ struct PackageConfigurationView: View {
                 fieldTitle("多分支")
                 Toggle("使用独立 Worktree 打包", isOn: $viewModel.useGitBranch)
                     .toggleStyle(.switch)
+                    .disabled(viewModel.mergeConflictBranch != nil || viewModel.isPreparing)
                     .onChange(of: viewModel.useGitBranch) { _, enabled in
                         if enabled && viewModel.remoteBranches.isEmpty {
                             viewModel.refreshBranches(fetchRemote: false)
@@ -274,11 +275,12 @@ struct PackageConfigurationView: View {
                         }
                         .labelsHidden()
                         .frame(maxWidth: .infinity)
+                        .disabled(viewModel.mergeConflictBranch != nil || viewModel.isPreparing)
 
                         Button(viewModel.isLoadingBranches ? "刷新中…" : "刷新") {
                             viewModel.refreshBranches()
                         }
-                        .disabled(viewModel.isLoadingBranches || viewModel.isPackaging || viewModel.isPreparing)
+                        .disabled(viewModel.isLoadingBranches || viewModel.isPackaging || viewModel.isPreparing || viewModel.mergeConflictBranch != nil)
                     }
                 }
 

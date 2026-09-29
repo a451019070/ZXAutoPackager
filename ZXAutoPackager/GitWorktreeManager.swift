@@ -6,12 +6,21 @@ struct GitWorktreeContext: Sendable {
     let projectDirectory: URL
 }
 
+struct GitMergeConflict: Error, Sendable {
+    let context: GitWorktreeContext
+    let branch: String
+    let nextIndex: Int
+    let files: [String]
+    let output: String
+}
+
 enum GitPreparationError: LocalizedError {
     case commandFailed(String, Int32, String)
     case invalidRepository
     case invalidProjectPath
     case noRemoteBranches
-    case mergeConflict(String, String)
+    case unresolvedConflicts([String])
+    case mergeNoLongerInProgress
     case podfileNotFound
     case cancelled
 
@@ -25,8 +34,10 @@ enum GitPreparationError: LocalizedError {
             return "无法确定项目相对于 Git 仓库的位置。"
         case .noRemoteBranches:
             return "没有找到 origin 远程分支。"
-        case .mergeConflict(let branch, let output):
-            return "合并 origin/\(branch) 时发生冲突，已停止打包并清理临时 Worktree。\n\(output)"
+        case .unresolvedConflicts(let files):
+            return "仍有未解决的冲突文件，请修改并执行 git add：\n\(files.joined(separator: "\n"))"
+        case .mergeNoLongerInProgress:
+            return "合并状态已改变（可能执行了 merge --abort 或 reset）。请放弃并重新准备。"
         case .podfileNotFound:
             return "临时项目目录中没有找到 Podfile。"
         case .cancelled:
@@ -130,6 +141,8 @@ nonisolated enum GitWorktreeManager {
         let temporaryProjectURL = relativeProjectPath.isEmpty
             ? worktreeRoot
             : worktreeRoot.appendingPathComponent(relativeProjectPath, isDirectory: true)
+        let context = GitWorktreeContext(repositoryRoot: root, worktreeRoot: worktreeRoot,
+                                         projectDirectory: temporaryProjectURL)
 
         var merged = Set<String>()
         for (index, mergeBranch) in mergeBranches.enumerated() {
@@ -155,7 +168,10 @@ nonisolated enum GitWorktreeManager {
                     arguments: ["-C", worktreeRoot.path, "diff", "--name-only", "--diff-filter=U"]
                 )
                 if conflicts.status == 0 && !conflicts.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    throw GitPreparationError.mergeConflict(mergeBranch, mergeResult.output)
+                    prepared = true
+                    throw GitMergeConflict(context: context, branch: mergeBranch, nextIndex: index + 1,
+                                           files: conflicts.output.split(separator: "\n").map(String.init),
+                                           output: mergeResult.output)
                 }
                 throw GitPreparationError.commandFailed(
                     "git merge origin/\(mergeBranch)", mergeResult.status, mergeResult.output
@@ -164,47 +180,100 @@ nonisolated enum GitWorktreeManager {
             onOutput("origin/\(mergeBranch) 合并完成（提交仅保存在临时 Worktree）。\n")
         }
 
-        if installPods {
-            let podfileURL = temporaryProjectURL.appendingPathComponent("Podfile")
-            guard FileManager.default.fileExists(atPath: podfileURL.path) else {
-                throw GitPreparationError.podfileNotFound
-            }
-
-            let searchPaths = commandSearchPaths(existingPath: ProcessInfo.processInfo.environment["PATH"])
-            guard let podExecutable = searchPaths
-                .map({ URL(fileURLWithPath: $0).appendingPathComponent("pod").path })
-                .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-                throw GitPreparationError.commandFailed(
-                    "pod install",
-                    127,
-                    "未找到 CocoaPods。请确认终端可执行 pod，并检查路径：\n\(searchPaths.joined(separator: "\n"))"
-                )
-            }
-
-            onOutput("===== 安装 CocoaPods 依赖 =====\n")
-            onOutput("正在执行 \(podExecutable) install…\n")
-            let podResult = try run(
-                executable: podExecutable,
-                arguments: ["install"],
-                currentDirectory: temporaryProjectURL,
-                cancellation: cancellation
-            )
-            guard !cancellation.isCancelled else {
-                throw GitPreparationError.cancelled
-            }
-            guard podResult.status == 0 else {
-                throw GitPreparationError.commandFailed("pod install", podResult.status, podResult.output)
-            }
-            onOutput("Pods 安装完成。\n")
-        }
-
+        try installDependencies(in: context, enabled: installPods, cancellation: cancellation, onOutput: onOutput)
         guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
         prepared = true
-        return GitWorktreeContext(
-            repositoryRoot: root,
-            worktreeRoot: worktreeRoot,
-            projectDirectory: temporaryProjectURL
+        return context
+    }
+
+    private static func installDependencies(
+        in context: GitWorktreeContext, enabled: Bool, cancellation: BuildCancellationController,
+        onOutput: @escaping @Sendable (String) -> Void
+    ) throws {
+        guard enabled else { return }
+        let temporaryProjectURL = context.projectDirectory
+        let podfileURL = temporaryProjectURL.appendingPathComponent("Podfile")
+        guard FileManager.default.fileExists(atPath: podfileURL.path) else {
+            throw GitPreparationError.podfileNotFound
+        }
+
+        let searchPaths = commandSearchPaths(existingPath: ProcessInfo.processInfo.environment["PATH"])
+        guard let podExecutable = searchPaths
+            .map({ URL(fileURLWithPath: $0).appendingPathComponent("pod").path })
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            throw GitPreparationError.commandFailed(
+                "pod install",
+                127,
+                "未找到 CocoaPods。请确认终端可执行 pod，并检查路径：\n\(searchPaths.joined(separator: "\n"))"
+            )
+        }
+
+        onOutput("===== 安装 CocoaPods 依赖 =====\n")
+        onOutput("正在执行 \(podExecutable) install…\n")
+        let podResult = try run(
+            executable: podExecutable,
+            arguments: ["install"],
+            currentDirectory: temporaryProjectURL,
+            cancellation: cancellation
         )
+        guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
+        guard podResult.status == 0 else {
+            throw GitPreparationError.commandFailed("pod install", podResult.status, podResult.output)
+        }
+        onOutput("Pods 安装完成。\n")
+    }
+
+    static func continueMerge(
+        conflict: GitMergeConflict, remainingBranches: [String], installPods: Bool,
+        cancellation: BuildCancellationController, onOutput: @escaping @Sendable (String) -> Void
+    ) throws -> GitWorktreeContext {
+        let context = conflict.context
+        let root = context.worktreeRoot
+        guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
+        let state = try run(executable: "/usr/bin/git", arguments: ["-C", root.path, "rev-parse", "-q", "--verify", "MERGE_HEAD"])
+        guard state.status == 0 else { throw GitPreparationError.mergeNoLongerInProgress }
+        let files = try unresolvedFiles(in: context)
+        guard files.isEmpty else { throw GitPreparationError.unresolvedConflicts(files) }
+        let commit = try run(executable: "/usr/bin/git", arguments: [
+            "-C", root.path, "-c", "user.name=ZXAutoPackager", "-c", "user.email=zxautopackager@localhost",
+            "-c", "commit.gpgsign=false", "-c", "core.editor=true", "merge", "--continue"
+        ], cancellation: cancellation)
+        guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
+        guard commit.status == 0 else {
+            throw GitPreparationError.commandFailed("git merge --continue", commit.status, commit.output)
+        }
+        onOutput("origin/\(conflict.branch) 的冲突已解决，合并继续。\n")
+        for (offset, branch) in remainingBranches.enumerated() {
+            guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
+            onOutput("合并第 \(conflict.nextIndex + offset + 1) 个分支：origin/\(branch)…\n")
+            let merge = try run(executable: "/usr/bin/git", arguments: [
+                "-C", root.path, "-c", "user.name=ZXAutoPackager", "-c", "user.email=zxautopackager@localhost",
+                "-c", "commit.gpgsign=false", "merge", "--no-edit", "--no-ff", "refs/remotes/origin/\(branch)"
+            ], cancellation: cancellation)
+            guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
+            guard merge.status == 0 else {
+                let files = try unresolvedFiles(in: context)
+                if !files.isEmpty {
+                    throw GitMergeConflict(context: context, branch: branch,
+                                           nextIndex: conflict.nextIndex + offset + 1, files: files, output: merge.output)
+                }
+                throw GitPreparationError.commandFailed("git merge origin/\(branch)", merge.status, merge.output)
+            }
+            onOutput("origin/\(branch) 合并完成。\n")
+        }
+        try installDependencies(in: context, enabled: installPods, cancellation: cancellation, onOutput: onOutput)
+        guard !cancellation.isCancelled else { throw GitPreparationError.cancelled }
+        return context
+    }
+
+    static func unresolvedFiles(in context: GitWorktreeContext) throws -> [String] {
+        let result = try run(executable: "/usr/bin/git", arguments: [
+            "-C", context.worktreeRoot.path, "diff", "--name-only", "--diff-filter=U"
+        ])
+        guard result.status == 0 else {
+            throw GitPreparationError.commandFailed("git diff --diff-filter=U", result.status, result.output)
+        }
+        return result.output.split(separator: "\n").map(String.init)
     }
 
     static func cleanup(_ context: GitWorktreeContext) {
