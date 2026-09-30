@@ -798,9 +798,9 @@ final class PackagerViewModel: ObservableObject {
             return
         }
         let panel = NSOpenPanel()
-        panel.title = "选择 Xcode 项目文件夹"
-        panel.message = "请选择包含 .xcworkspace 或 .xcodeproj 的项目根目录"
-        panel.prompt = "选择项目文件夹"
+        panel.title = AppStrings.text("选择 Xcode 项目文件夹")
+        panel.message = AppStrings.text("请选择包含 .xcworkspace 或 .xcodeproj 的项目根目录")
+        panel.prompt = AppStrings.text("选择项目文件夹")
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = false
@@ -828,8 +828,8 @@ final class PackagerViewModel: ObservableObject {
 
     func chooseOutputDirectory() {
         let panel = NSOpenPanel()
-        panel.title = "选择导出目录"
-        panel.prompt = "导出到这里"
+        panel.title = AppStrings.text("选择导出目录")
+        panel.prompt = AppStrings.text("导出到这里")
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
@@ -924,8 +924,8 @@ final class PackagerViewModel: ObservableObject {
 
     func importProvisioningProfile() {
         let panel = NSOpenPanel()
-        panel.title = "选择 iOS 描述文件"
-        panel.prompt = "导入描述文件"
+        panel.title = AppStrings.text("选择 iOS 描述文件")
+        panel.prompt = AppStrings.text("导入描述文件")
         panel.allowedContentTypes = [UTType(filenameExtension: "mobileprovision") ?? .data]
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false

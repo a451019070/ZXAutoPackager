@@ -29,8 +29,8 @@ struct PackageStatusView: View {
         HStack(alignment: .top, spacing: 14) {
             statusIcon
             VStack(alignment: .leading, spacing: 3) {
-                Text(viewModel.statusMessage == "请选择工程和导出目录" || viewModel.statusMessage == "已恢复上次填写的打包配置"
-                     ? viewModel.configurationHint : viewModel.statusMessage)
+                Text(AppStrings.text(viewModel.statusMessage == "请选择工程和导出目录" || viewModel.statusMessage == "已恢复上次填写的打包配置"
+                     ? viewModel.configurationHint : viewModel.statusMessage))
                     .lineLimit(2)
                 if viewModel.isPreparing {
                     Text("正在准备临时 Worktree…")
