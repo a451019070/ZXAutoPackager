@@ -127,7 +127,10 @@ final class PackagerViewModel: ObservableObject {
         didSet { defaults.set(configuration.rawValue, forKey: Keys.configuration) }
     }
     @Published var versionNumber = "" {
-        didSet { defaults.set(versionNumber, forKey: Keys.versionNumber) }
+        didSet {
+            defaults.set(versionNumber, forKey: Keys.versionNumber)
+            if usePgyerBuildNumber && versionNumber != oldValue { buildNumber = "" }
+        }
     }
     @Published var buildNumber = "" {
         didSet { defaults.set(buildNumber, forKey: Keys.buildNumber) }
@@ -139,7 +142,16 @@ final class PackagerViewModel: ObservableObject {
         didSet { defaults.set(uploadToPgyer, forKey: Keys.uploadToPgyer) }
     }
     @Published var usePgyerBuildNumber = false {
-        didSet { defaults.set(usePgyerBuildNumber, forKey: Keys.usePgyerBuildNumber) }
+        didSet {
+            defaults.set(usePgyerBuildNumber, forKey: Keys.usePgyerBuildNumber)
+            if !usePgyerBuildNumber && oldValue {
+                refreshXcodeBuildNumber()
+            } else if usePgyerBuildNumber && !oldValue {
+                buildLookupID = UUID()
+                hasManualBuildOverride = false
+                buildNumber = ""
+            }
+        }
     }
     @Published var pgyerAPIKey = "" {
         didSet { defaults.set(pgyerAPIKey, forKey: Keys.pgyerAPIKey) }
@@ -262,6 +274,8 @@ final class PackagerViewModel: ObservableObject {
     }
     private var cancellationController: BuildCancellationController?
     private var schemeLookupID = UUID()
+    private var buildLookupID = UUID()
+    private var hasManualBuildOverride = false
     private var signingLookupID = UUID()
 
     deinit {
@@ -306,7 +320,7 @@ final class PackagerViewModel: ObservableObject {
             ? true
             : defaults.bool(forKey: Keys.installPods)
 
-        buildNumber = defaults.string(forKey: Keys.buildNumber) ?? ""
+        buildNumber = ""
         signingProfileUUID = defaults.string(forKey: Keys.signingProfileUUID)
         if let signingProfileUUID {
             do {
@@ -523,8 +537,8 @@ final class PackagerViewModel: ObservableObject {
 
     var canPackage: Bool {
         let trimmedVersion = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let versionCanResolve = trimmedVersion.isEmpty || isValidVersionNumber
+        let trimmedBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let buildCanResolve = usePgyerBuildNumber || trimmedBuild.isEmpty || Int(trimmedBuild).map { $0 > 0 } == true
 
         return         !isPackaging &&
@@ -572,6 +586,7 @@ final class PackagerViewModel: ObservableObject {
     }
 
     var canFetchPgyerBuildNumber: Bool {
+        usePgyerBuildNumber &&
         platform == .iOS &&
         !isPackaging &&
         !isLoadingPgyerBuildNumber &&
@@ -609,7 +624,7 @@ final class PackagerViewModel: ObservableObject {
             statusMessage = "请填写蒲公英 API Key 和 App Key"
             return
         }
-        guard !isPackaging, !isLoadingPgyerBuildNumber else { return }
+        guard usePgyerBuildNumber, !isPackaging, !isLoadingPgyerBuildNumber else { return }
 
         isLoadingPgyerBuildNumber = true
         statusMessage = "正在查询蒲公英历史版本…"
@@ -624,8 +639,9 @@ final class PackagerViewModel: ObservableObject {
                     appKey: appKey,
                     version: version
                 ) { _ in }
-                self.buildNumber = String(nextBuild)
                 self.isLoadingPgyerBuildNumber = false
+                guard self.usePgyerBuildNumber, self.versionNumber.trimmingCharacters(in: .whitespacesAndNewlines) == version else { return }
+                self.buildNumber = String(nextBuild)
                 self.statusMessage = "蒲公英版本 \(version) 的下一 Build 号：\(nextBuild)"
             } catch is CancellationError {
                 self.isLoadingPgyerBuildNumber = false
@@ -677,6 +693,61 @@ final class PackagerViewModel: ObservableObject {
                 await MainActor.run {
                     self.isLoadingBranches = false
                     self.statusMessage = "分支读取失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func setBuildNumberManually(_ value: String) {
+        guard !usePgyerBuildNumber else { return }
+        buildLookupID = UUID()
+        hasManualBuildOverride = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        buildNumber = value
+    }
+
+    func refreshXcodeBuildNumber() {
+        let lookupID = UUID()
+        buildLookupID = lookupID
+        guard !usePgyerBuildNumber, !isPackaging else { return }
+        hasManualBuildOverride = false
+
+        let projectPath = containerPath
+        let selectedScheme = scheme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedConfiguration = configuration
+        let selectedPlatform = platform
+        guard !projectPath.isEmpty, !selectedScheme.isEmpty else {
+            buildNumber = ""
+            return
+        }
+        guard let projectAccess = restoreAccess(
+            bookmarkKey: Keys.projectBookmark,
+            fallbackPath: projectPath,
+            directoryName: "项目目录"
+        ) else { return }
+
+        buildNumber = ""
+        Task.detached(priority: .utility) {
+            defer { projectAccess.stop() }
+            do {
+                let version = try XcodePackager.readBuildVersion(
+                    containerPath: projectAccess.url.path,
+                    scheme: selectedScheme,
+                    configuration: selectedConfiguration.rawValue,
+                    platform: selectedPlatform,
+                    cancellation: BuildCancellationController()
+                )
+                await MainActor.run {
+                    guard self.buildLookupID == lookupID,
+                          !self.usePgyerBuildNumber, !self.isPackaging,
+                          self.containerPath == projectPath, self.scheme == selectedScheme,
+                          self.configuration == selectedConfiguration,
+                          self.platform == selectedPlatform else { return }
+                    self.buildNumber = version.currentProjectVersion
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.buildLookupID == lookupID, !self.isPackaging else { return }
+                    self.statusMessage = "读取 Xcode Build 号失败：\(error.localizedDescription)"
                 }
             }
         }
@@ -909,7 +980,7 @@ final class PackagerViewModel: ObservableObject {
         let platform = platform
         let configuration = configuration.rawValue
         let enteredVersion = versionNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-        let enteredBuild = buildNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let enteredBuild = hasManualBuildOverride ? buildNumber.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         let shouldUploadToPgyer = uploadToPgyer
         let shouldUsePgyerBuildNumber = usePgyerBuildNumber
         let shouldUseGitBranch = useGitBranch
@@ -1015,7 +1086,7 @@ final class PackagerViewModel: ObservableObject {
                 } else {
                     guard let value = Int(resolvedBuild), value > 0 else {
                         throw PackageError.invalidInput(
-                            "Xcode 的 CURRENT_PROJECT_VERSION 必须是大于 0 的整数。"
+                            "Build 号必须是大于 0 的整数，请检查手动填写值或 Xcode 的 CURRENT_PROJECT_VERSION。"
                         )
                     }
                     build = value
@@ -1132,7 +1203,7 @@ final class PackagerViewModel: ObservableObject {
                         downloadURL: uploadResult?.downloadURL
                     ))
                     self.defaults.set(build, forKey: Keys.lastSuccessfulBuild)
-                    self.buildNumber = String(build + 1)
+                    self.buildNumber = String(build)
                     self.updateDescription = ""
                 }
             } catch {

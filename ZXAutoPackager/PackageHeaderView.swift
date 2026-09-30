@@ -1,13 +1,13 @@
+import AppKit
 import SwiftUI
 
 struct PackageHeaderView: View {
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "shippingbox.fill")
-                .font(.system(size: 28))
-                .foregroundStyle(.white)
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
                 .frame(width: 52, height: 52)
-                .background(.blue.gradient, in: RoundedRectangle(cornerRadius: 14))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("ZX Auto Packager")

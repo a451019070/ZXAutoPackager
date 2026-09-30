@@ -38,6 +38,7 @@ struct PackageView: View {
         .task {
             if !viewModel.containerPath.isEmpty {
                 viewModel.refreshSchemes()
+                viewModel.refreshXcodeBuildNumber()
             }
             if viewModel.useGitBranch && viewModel.remoteBranches.isEmpty {
                 viewModel.refreshBranches(fetchRemote: false)

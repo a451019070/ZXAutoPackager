@@ -115,12 +115,18 @@ struct PackageConfigurationView: View {
         }
         .onChange(of: viewModel.containerPath) { _, _ in
             if showSigningSettings { viewModel.refreshSigningProfiles() }
+            viewModel.refreshXcodeBuildNumber()
         }
         .onChange(of: viewModel.scheme) { _, _ in
             if showSigningSettings { viewModel.refreshSigningProfiles() }
+            viewModel.refreshXcodeBuildNumber()
         }
         .onChange(of: viewModel.configuration) { _, _ in
             if showSigningSettings { viewModel.refreshSigningProfiles() }
+            viewModel.refreshXcodeBuildNumber()
+        }
+        .onChange(of: viewModel.platform) { _, _ in
+            viewModel.refreshXcodeBuildNumber()
         }
     }
 
@@ -157,18 +163,21 @@ struct PackageConfigurationView: View {
                 .help("留空时读取 Xcode 的 MARKETING_VERSION")
             Text("Build 号")
                 .fixedSize()
-            TextField("Xcode 默认", text: $viewModel.buildNumber)
+            TextField(viewModel.usePgyerBuildNumber ? "打包前查询" : "Xcode 默认", text: Binding(
+                get: { viewModel.buildNumber },
+                set: { viewModel.setBuildNumberManually($0) }
+            ))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 82)
                 .disabled(viewModel.usePgyerBuildNumber)
-                .help(viewModel.usePgyerBuildNumber ? "打包前自动使用当前 Version 的远端最大值 +1" : "留空时读取 Xcode 的 CURRENT_PROJECT_VERSION")
+                .help(viewModel.usePgyerBuildNumber ? "打包前获取蒲公英当前版本最大 Build 号 +1" : "默认显示并使用 Xcode 的 CURRENT_PROJECT_VERSION；可手动修改，清空后打包仍使用 Xcode 默认值，不自动 +1")
             if viewModel.platform == .iOS {
                 Button(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询") {
                     viewModel.fetchNextBuildNumberFromPgyer()
                 }
                 .disabled(!viewModel.canFetchPgyerBuildNumber)
                 .help("查询蒲公英 Build 号")
-                Toggle("自动获取", isOn: $viewModel.usePgyerBuildNumber)
+                Toggle("从蒲公英获取", isOn: $viewModel.usePgyerBuildNumber)
                     .toggleStyle(.switch)
                     .fixedSize()
                     .help("打包前从蒲公英自动获取 Build 号")
