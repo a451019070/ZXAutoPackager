@@ -116,7 +116,8 @@ final class PackagerViewModel: ObservableObject {
     }
     @Published var platform: PackagePlatform = .iOS {
         didSet {
-            defaults.set(platform.rawValue, forKey: Keys.platform)
+            guard !isRestoringProjectSwitches else { return }
+            saveProjectPlatform()
             if platform == .macOS {
                 uploadToPgyer = false
                 usePgyerBuildNumber = false
@@ -129,7 +130,7 @@ final class PackagerViewModel: ObservableObject {
     @Published var versionNumber = "" {
         didSet {
             defaults.set(versionNumber, forKey: Keys.versionNumber)
-            if usePgyerBuildNumber && versionNumber != oldValue {
+            if !isRestoringProjectSwitches && usePgyerBuildNumber && versionNumber != oldValue {
                 buildNumber = ""
                 schedulePgyerBuildLookup()
             }
@@ -138,17 +139,21 @@ final class PackagerViewModel: ObservableObject {
     @Published var buildNumber = "" {
         didSet { defaults.set(buildNumber, forKey: Keys.buildNumber) }
     }
-    @Published var outputDirectory = "" {
-        didSet { defaults.set(outputDirectory, forKey: Keys.outputDirectory) }
-    }
+    @Published private(set) var outputDirectory = ""
     @Published private(set) var projectDirectoryHistory: [String] = []
     @Published private(set) var outputDirectoryHistory: [String] = []
     @Published var uploadToPgyer = false {
-        didSet { defaults.set(uploadToPgyer, forKey: Keys.uploadToPgyer) }
+        didSet {
+            if !uploadToPgyer && usePgyerBuildNumber && !isRestoringProjectSwitches {
+                usePgyerBuildNumber = false
+            }
+            saveProjectSwitches()
+        }
     }
     @Published var usePgyerBuildNumber = false {
         didSet {
-            defaults.set(usePgyerBuildNumber, forKey: Keys.usePgyerBuildNumber)
+            saveProjectSwitches()
+            guard !isRestoringProjectSwitches else { return }
             if !usePgyerBuildNumber && oldValue {
                 pgyerLookupTask?.cancel()
                 pgyerLookupID = UUID()
@@ -185,7 +190,7 @@ final class PackagerViewModel: ObservableObject {
     }
     @Published var updateDescription = ""
     @Published var sendToFeishu = false {
-        didSet { defaults.set(sendToFeishu, forKey: Keys.sendToFeishu) }
+        didSet { saveProjectSwitches() }
     }
     @Published var feishuWebhook = "" {
         didSet { defaults.set(feishuWebhook, forKey: Keys.feishuWebhook) }
@@ -195,7 +200,7 @@ final class PackagerViewModel: ObservableObject {
     }
     @Published var useGitBranch = false {
         didSet {
-            defaults.set(useGitBranch, forKey: Keys.useGitBranch)
+            saveProjectSwitches()
             if useGitBranch != oldValue { discardPreparedWorktree() }
         }
     }
@@ -215,7 +220,7 @@ final class PackagerViewModel: ObservableObject {
     }
     @Published var installPods = true {
         didSet {
-            defaults.set(installPods, forKey: Keys.installPods)
+            saveProjectSwitches()
             if installPods != oldValue { discardPreparedWorktree() }
         }
     }
@@ -276,9 +281,47 @@ final class PackagerViewModel: ObservableObject {
         static let installPods = "ZXAutoPackager.installPods"
         static let signingProfileUUID = "ZXAutoPackager.signingProfileUUID"
         static let lastSuccessfulBuild = "ZXAutoPackager.lastSuccessfulBuild"
+        static let projectSwitches = "ZXAutoPackager.projectSwitches"
+        static let projectOutputDirectories = "ZXAutoPackager.projectOutputDirectories"
+        static let projectPlatforms = "ZXAutoPackager.projectPlatforms"
+    }
+
+    private struct ProjectSwitches: Codable {
+        var useGitBranch: Bool
+        var sendToFeishu: Bool
+        var uploadToPgyer: Bool
+        var usePgyerBuildNumber: Bool
+        var installPods: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case useGitBranch, sendToFeishu, uploadToPgyer, usePgyerBuildNumber, installPods
+        }
+
+        init(useGitBranch: Bool, sendToFeishu: Bool, uploadToPgyer: Bool,
+             usePgyerBuildNumber: Bool, installPods: Bool) {
+            self.useGitBranch = useGitBranch
+            self.sendToFeishu = sendToFeishu
+            self.uploadToPgyer = uploadToPgyer
+            self.usePgyerBuildNumber = usePgyerBuildNumber
+            self.installPods = installPods
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            useGitBranch = try values.decode(Bool.self, forKey: .useGitBranch)
+            sendToFeishu = try values.decode(Bool.self, forKey: .sendToFeishu)
+            uploadToPgyer = try values.decode(Bool.self, forKey: .uploadToPgyer)
+            usePgyerBuildNumber = try values.decode(Bool.self, forKey: .usePgyerBuildNumber)
+            installPods = try values.decodeIfPresent(Bool.self, forKey: .installPods) ?? true
+        }
+
+        static let disabled = ProjectSwitches(useGitBranch: false, sendToFeishu: false,
+                                              uploadToPgyer: false, usePgyerBuildNumber: false,
+                                              installPods: true)
     }
 
     private let defaults = UserDefaults.standard
+    private var isRestoringProjectSwitches = false
     private let historyStore = PackageHistoryStore()
     private let maximumLogLength = 300_000
     private var logRefreshTask: Task<Void, Never>?
@@ -328,35 +371,33 @@ final class PackagerViewModel: ObservableObject {
         }
         containerPath = defaults.string(forKey: Keys.containerPath) ?? ""
         scheme = defaults.string(forKey: Keys.scheme) ?? ""
-        platform = PackagePlatform(rawValue: defaults.string(forKey: Keys.platform) ?? "") ?? .iOS
+        migrateLegacyProjectPlatform()
+        restoreProjectPlatform(for: containerPath)
         configuration = Configuration(
             rawValue: defaults.string(forKey: Keys.configuration) ?? ""
         ) ?? .release
         versionNumber = ""
-        outputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
         projectDirectoryHistory = defaults.stringArray(forKey: Keys.projectDirectoryHistory) ?? []
         outputDirectoryHistory = defaults.stringArray(forKey: Keys.outputDirectoryHistory) ?? []
         migrateDirectoryHistory(path: containerPath, bookmarkKey: Keys.projectBookmark,
                                 bookmarkHistoryKey: Keys.projectBookmarkHistory, isProject: true)
-        migrateDirectoryHistory(path: outputDirectory, bookmarkKey: Keys.outputBookmark,
+        let legacyOutputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
+        migrateDirectoryHistory(path: legacyOutputDirectory, bookmarkKey: Keys.outputBookmark,
                                 bookmarkHistoryKey: Keys.outputBookmarkHistory, isProject: false)
-        uploadToPgyer = platform == .iOS && defaults.bool(forKey: Keys.uploadToPgyer)
-        usePgyerBuildNumber = platform == .iOS && defaults.bool(forKey: Keys.usePgyerBuildNumber)
+        migrateLegacyOutputDirectory(legacyOutputDirectory)
+        restoreOutputDirectory(for: containerPath)
         pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
         pgyerAppKey = defaults.string(forKey: Keys.pgyerAppKey) ?? ""
-        sendToFeishu = defaults.bool(forKey: Keys.sendToFeishu)
         feishuWebhook = defaults.string(forKey: Keys.feishuWebhook) ?? ""
         feishuImageKey = defaults.string(forKey: Keys.feishuImageKey) ?? ""
         defaults.removeObject(forKey: "ZXAutoPackager.feishuAppID")
         defaults.removeObject(forKey: "ZXAutoPackager.feishuAppSecret")
         defaults.removeObject(forKey: "ZXAutoPackager.updateDescription")
-        useGitBranch = defaults.bool(forKey: Keys.useGitBranch)
+        migrateLegacyProjectSwitches()
+        restoreProjectSwitches(for: containerPath)
         selectedBranch = defaults.string(forKey: Keys.selectedBranch) ?? ""
         defaults.removeObject(forKey: Keys.mergeBranches)
         defaults.removeObject(forKey: Keys.mergeBranch)
-        installPods = defaults.object(forKey: Keys.installPods) == nil
-            ? true
-            : defaults.bool(forKey: Keys.installPods)
 
         buildNumber = ""
         signingProfileUUID = defaults.string(forKey: Keys.signingProfileUUID)
@@ -371,6 +412,124 @@ final class PackagerViewModel: ObservableObject {
         if !containerPath.isEmpty || !outputDirectory.isEmpty {
             statusMessage = "已恢复上次填写的打包配置"
         }
+    }
+
+    private func projectSwitchKey(for path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private func migrateLegacyProjectPlatform() {
+        guard let legacy = defaults.string(forKey: Keys.platform) else { return }
+        if !containerPath.isEmpty {
+            var platforms = defaults.dictionary(forKey: Keys.projectPlatforms) as? [String: String] ?? [:]
+            let project = projectSwitchKey(for: containerPath)
+            if platforms[project] == nil {
+                platforms[project] = legacy
+                defaults.set(platforms, forKey: Keys.projectPlatforms)
+            }
+        }
+        defaults.removeObject(forKey: Keys.platform)
+    }
+
+    private func saveProjectPlatform() {
+        guard !containerPath.isEmpty else { return }
+        var platforms = defaults.dictionary(forKey: Keys.projectPlatforms) as? [String: String] ?? [:]
+        platforms[projectSwitchKey(for: containerPath)] = platform.rawValue
+        defaults.set(platforms, forKey: Keys.projectPlatforms)
+    }
+
+    private func restoreProjectPlatform(for path: String) {
+        let platforms = defaults.dictionary(forKey: Keys.projectPlatforms) as? [String: String] ?? [:]
+        let saved = path.isEmpty ? nil : platforms[projectSwitchKey(for: path)]
+        isRestoringProjectSwitches = true
+        platform = PackagePlatform(rawValue: saved ?? "") ?? .iOS
+        isRestoringProjectSwitches = false
+    }
+
+    private func migrateLegacyOutputDirectory(_ path: String) {
+        guard !containerPath.isEmpty, !path.isEmpty else {
+            defaults.removeObject(forKey: Keys.outputDirectory)
+            return
+        }
+        var directories = defaults.dictionary(forKey: Keys.projectOutputDirectories) as? [String: String] ?? [:]
+        let project = projectSwitchKey(for: containerPath)
+        if directories[project] == nil {
+            directories[project] = path
+            defaults.set(directories, forKey: Keys.projectOutputDirectories)
+        }
+        defaults.removeObject(forKey: Keys.outputDirectory)
+    }
+
+    private func restoreOutputDirectory(for path: String) {
+        let directories = defaults.dictionary(forKey: Keys.projectOutputDirectories) as? [String: String] ?? [:]
+        outputDirectory = path.isEmpty ? "" : directories[projectSwitchKey(for: path)] ?? ""
+        if !outputDirectory.isEmpty {
+            restoreHistoricalBookmark(for: outputDirectory, isProject: false)
+        } else {
+            defaults.removeObject(forKey: Keys.outputBookmark)
+        }
+    }
+
+    private func setOutputDirectory(_ path: String) {
+        outputDirectory = path
+        guard !containerPath.isEmpty else { return }
+        var directories = defaults.dictionary(forKey: Keys.projectOutputDirectories) as? [String: String] ?? [:]
+        directories[projectSwitchKey(for: containerPath)] = path
+        defaults.set(directories, forKey: Keys.projectOutputDirectories)
+    }
+
+    private func loadProjectSwitches() -> [String: ProjectSwitches] {
+        guard let data = defaults.data(forKey: Keys.projectSwitches) else { return [:] }
+        return (try? JSONDecoder().decode([String: ProjectSwitches].self, from: data)) ?? [:]
+    }
+
+    private func saveProjectSwitches() {
+        guard !isRestoringProjectSwitches, !containerPath.isEmpty else { return }
+        var records = loadProjectSwitches()
+        records[projectSwitchKey(for: containerPath)] = ProjectSwitches(
+            useGitBranch: useGitBranch, sendToFeishu: sendToFeishu,
+            uploadToPgyer: uploadToPgyer, usePgyerBuildNumber: usePgyerBuildNumber,
+            installPods: installPods
+        )
+        if let data = try? JSONEncoder().encode(records) {
+            defaults.set(data, forKey: Keys.projectSwitches)
+        }
+    }
+
+    private func restoreProjectSwitches(for path: String) {
+        let switches = path.isEmpty ? .disabled :
+            loadProjectSwitches()[projectSwitchKey(for: path)] ?? .disabled
+        isRestoringProjectSwitches = true
+        useGitBranch = switches.useGitBranch
+        sendToFeishu = switches.sendToFeishu
+        uploadToPgyer = platform == .iOS && switches.uploadToPgyer
+        usePgyerBuildNumber = uploadToPgyer && switches.usePgyerBuildNumber
+        installPods = switches.installPods
+        isRestoringProjectSwitches = false
+    }
+
+    private func migrateLegacyProjectSwitches() {
+        let oldKeys = [Keys.useGitBranch, Keys.sendToFeishu,
+                       Keys.uploadToPgyer, Keys.usePgyerBuildNumber, Keys.installPods]
+        guard oldKeys.contains(where: { defaults.object(forKey: $0) != nil }) else { return }
+        if !containerPath.isEmpty {
+            let key = projectSwitchKey(for: containerPath)
+            var records = loadProjectSwitches()
+            if records[key] == nil {
+                records[key] = ProjectSwitches(
+                    useGitBranch: defaults.bool(forKey: Keys.useGitBranch),
+                    sendToFeishu: defaults.bool(forKey: Keys.sendToFeishu),
+                    uploadToPgyer: defaults.bool(forKey: Keys.uploadToPgyer),
+                    usePgyerBuildNumber: defaults.bool(forKey: Keys.usePgyerBuildNumber),
+                    installPods: defaults.object(forKey: Keys.installPods) == nil
+                        ? true : defaults.bool(forKey: Keys.installPods)
+                )
+                if let data = try? JSONEncoder().encode(records) {
+                    defaults.set(data, forKey: Keys.projectSwitches)
+                }
+            }
+        }
+        oldKeys.forEach { defaults.removeObject(forKey: $0) }
     }
 
     var canPrepareBranches: Bool {
@@ -891,7 +1050,8 @@ final class PackagerViewModel: ObservableObject {
     }
 
     private func applyProjectPath(_ path: String) {
-        let projectChanged = containerPath != path
+        let projectChanged = projectSwitchKey(for: containerPath) != projectSwitchKey(for: path)
+        if projectChanged { isRestoringProjectSwitches = true }
         containerPath = path
         if projectChanged {
             pgyerLookupTask?.cancel()
@@ -906,6 +1066,9 @@ final class PackagerViewModel: ObservableObject {
             remoteBranches = []
             selectedBranch = ""
             mergeBranches = []
+            restoreProjectPlatform(for: path)
+            restoreProjectSwitches(for: path)
+            restoreOutputDirectory(for: path)
         }
         refreshSchemes()
         if useGitBranch {
@@ -926,7 +1089,7 @@ final class PackagerViewModel: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         saveBookmark(for: url, key: Keys.outputBookmark)
         recordDirectory(url.path, isProject: false)
-        outputDirectory = url.path
+        setOutputDirectory(url.path)
         statusMessage = "导出目录已选择"
     }
 
@@ -934,7 +1097,7 @@ final class PackagerViewModel: ObservableObject {
         guard outputDirectoryHistory.contains(path) else { return }
         restoreHistoricalBookmark(for: path, isProject: false)
         recordDirectory(path, isProject: false)
-        outputDirectory = path
+        setOutputDirectory(path)
         statusMessage = "导出目录已选择"
     }
 

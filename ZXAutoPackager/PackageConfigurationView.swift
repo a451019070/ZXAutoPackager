@@ -178,7 +178,7 @@ struct PackageConfigurationView: View {
                 .frame(width: 82)
                 .disabled(viewModel.usePgyerBuildNumber)
                 .help(viewModel.usePgyerBuildNumber ? "打包前获取蒲公英当前版本最大 Build 号 +1" : "默认显示并使用 Xcode 的 CURRENT_PROJECT_VERSION；可手动修改，清空后打包仍使用 Xcode 默认值，不自动 +1")
-            if viewModel.platform == .iOS {
+            if viewModel.platform == .iOS && viewModel.uploadToPgyer {
                 Button(AppStrings.text(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询")) {
                     viewModel.fetchNextBuildNumberFromPgyer()
                 }
