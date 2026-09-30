@@ -14,7 +14,7 @@ struct PackageLogView: View {
     var body: some View {
         GroupBox {
             VStack(spacing: 0) {
-                BuildLogTextView(text: log.isEmpty ? "构建进度将在这里显示。" : log)
+                BuildLogTextView(text: log.isEmpty ? AppStrings.text("构建进度将在这里显示。") : log)
                     .frame(height: currentHeight)
 
                 resizeHandle

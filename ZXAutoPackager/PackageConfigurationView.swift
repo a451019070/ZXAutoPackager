@@ -58,7 +58,7 @@ struct PackageConfigurationView: View {
                         .labelsHidden()
                         .pickerStyle(.segmented)
                         .frame(width: 180)
-                        Text(viewModel.platform == .iOS ? "导出 IPA" : "导出 macOS 应用 ZIP")
+                        Text(AppStrings.text(viewModel.platform == .iOS ? "导出 IPA" : "导出 macOS 应用 ZIP"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -101,7 +101,7 @@ struct PackageConfigurationView: View {
                     Button {
                         showAdvancedOptions = true
                     } label: {
-                        Text(enabledOptions.joined(separator: " · "))
+                        Text(enabledOptions.map { AppStrings.text($0) }.joined(separator: " · "))
                             .font(.caption)
                             .foregroundStyle(optionsNeedSetup ? .orange : .secondary)
                             .lineLimit(1)
@@ -150,7 +150,7 @@ struct PackageConfigurationView: View {
                 .labelsHidden()
                 .frame(width: 130)
             }
-            Button(viewModel.isLoadingSchemes ? "读取中…" : "刷新") {
+            Button(AppStrings.text(viewModel.isLoadingSchemes ? "读取中…" : "刷新")) {
                 viewModel.refreshSchemes()
             }
             .disabled(viewModel.containerPath.isEmpty || viewModel.isLoadingSchemes || viewModel.isPackaging || viewModel.isPreparing || viewModel.mergeConflictBranch != nil)
@@ -179,7 +179,7 @@ struct PackageConfigurationView: View {
                 .disabled(viewModel.usePgyerBuildNumber)
                 .help(viewModel.usePgyerBuildNumber ? "打包前获取蒲公英当前版本最大 Build 号 +1" : "默认显示并使用 Xcode 的 CURRENT_PROJECT_VERSION；可手动修改，清空后打包仍使用 Xcode 默认值，不自动 +1")
             if viewModel.platform == .iOS {
-                Button(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询") {
+                Button(AppStrings.text(viewModel.isLoadingPgyerBuildNumber ? "查询中…" : "查询")) {
                     viewModel.fetchNextBuildNumberFromPgyer()
                 }
                 .disabled(!viewModel.canFetchPgyerBuildNumber)
@@ -293,7 +293,7 @@ struct PackageConfigurationView: View {
                         .frame(maxWidth: .infinity)
                         .disabled(viewModel.mergeConflictBranch != nil || viewModel.isPreparing)
 
-                        Button(viewModel.isLoadingBranches ? "刷新中…" : "刷新") {
+                        Button(AppStrings.text(viewModel.isLoadingBranches ? "刷新中…" : "刷新")) {
                             viewModel.refreshBranches()
                         }
                         .disabled(viewModel.isLoadingBranches || viewModel.isPackaging || viewModel.isPreparing || viewModel.mergeConflictBranch != nil)
@@ -399,10 +399,10 @@ struct PackageConfigurationView: View {
                         Toggle("打包后上传蒲公英", isOn: $viewModel.uploadToPgyer)
                             .toggleStyle(.switch)
                         Spacer()
-                        Text(pgyerStatus)
+                        Text(AppStrings.text(pgyerStatus))
                             .font(.caption)
                             .foregroundStyle(pgyerNeedsSetup ? .orange : .secondary)
-                        Button(showPgyerSettings ? "收起配置" : "配置…") {
+                        Button(AppStrings.text(showPgyerSettings ? "收起配置" : "配置…")) {
                             showPgyerSettings.toggle()
                         }
                     }
@@ -432,10 +432,10 @@ struct PackageConfigurationView: View {
                     Toggle("打包后发送飞书通知", isOn: $viewModel.sendToFeishu)
                         .toggleStyle(.switch)
                     Spacer()
-                    Text(feishuStatus)
+                    Text(AppStrings.text(feishuStatus))
                         .font(.caption)
                         .foregroundStyle(feishuNeedsSetup ? .orange : .secondary)
-                    Button(showFeishuSettings ? "收起配置" : "配置…") {
+                    Button(AppStrings.text(showFeishuSettings ? "收起配置" : "配置…")) {
                         showFeishuSettings.toggle()
                     }
                 }
@@ -465,12 +465,12 @@ struct PackageConfigurationView: View {
                 GridRow {
                     fieldTitle("签名方式")
                     HStack {
-                        Text(viewModel.signingProfileUUID == nil ? "使用工程原有签名" : "指定描述文件 · 手动签名")
+                        Text(AppStrings.text(viewModel.signingProfileUUID == nil ? "使用工程原有签名" : "指定描述文件 · 手动签名"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         Spacer()
-                        Button(showSigningSettings ? "收起" : "配置…") {
+                        Button(AppStrings.text(showSigningSettings ? "收起" : "配置…")) {
                             showSigningSettings.toggle()
                             if showSigningSettings { viewModel.refreshSigningProfiles() }
                         }
@@ -496,7 +496,7 @@ struct PackageConfigurationView: View {
                             .labelsHidden()
                             .frame(maxWidth: .infinity)
                             .disabled(viewModel.isPackaging || viewModel.isLoadingSigningProfiles)
-                            Button(viewModel.isLoadingSigningProfiles ? "读取中…" : "刷新") {
+                            Button(AppStrings.text(viewModel.isLoadingSigningProfiles ? "读取中…" : "刷新")) {
                                 viewModel.refreshSigningProfiles()
                             }
                             .disabled(viewModel.isPackaging || viewModel.isLoadingSigningProfiles)
@@ -533,7 +533,7 @@ struct PackageConfigurationView: View {
     }
 
     private func fieldTitle(_ title: String) -> some View {
-        Text(title)
+        Text(LocalizedStringKey(title))
             .fontWeight(.medium)
             .frame(width: 86, alignment: .trailing)
     }
