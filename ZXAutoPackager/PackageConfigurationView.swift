@@ -157,7 +157,10 @@ struct PackageConfigurationView: View {
         HStack(spacing: 8) {
             Text("版本号")
                 .fixedSize()
-            TextField("Xcode 默认", text: $viewModel.versionNumber)
+            TextField("Xcode 默认", text: Binding(
+                get: { viewModel.versionNumber },
+                set: { viewModel.setVersionNumberManually($0) }
+            ))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 86)
                 .help("留空时读取 Xcode 的 MARKETING_VERSION")

@@ -129,7 +129,10 @@ final class PackagerViewModel: ObservableObject {
     @Published var versionNumber = "" {
         didSet {
             defaults.set(versionNumber, forKey: Keys.versionNumber)
-            if usePgyerBuildNumber && versionNumber != oldValue { buildNumber = "" }
+            if usePgyerBuildNumber && versionNumber != oldValue {
+                buildNumber = ""
+                schedulePgyerBuildLookup()
+            }
         }
     }
     @Published var buildNumber = "" {
@@ -145,19 +148,38 @@ final class PackagerViewModel: ObservableObject {
         didSet {
             defaults.set(usePgyerBuildNumber, forKey: Keys.usePgyerBuildNumber)
             if !usePgyerBuildNumber && oldValue {
+                pgyerLookupTask?.cancel()
+                pgyerLookupID = UUID()
+                isLoadingPgyerBuildNumber = false
                 refreshXcodeBuildNumber()
             } else if usePgyerBuildNumber && !oldValue {
-                buildLookupID = UUID()
                 hasManualBuildOverride = false
                 buildNumber = ""
+                if versionNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    refreshXcodeBuildNumber()
+                } else {
+                    fetchNextBuildNumberFromPgyer()
+                }
             }
         }
     }
     @Published var pgyerAPIKey = "" {
-        didSet { defaults.set(pgyerAPIKey, forKey: Keys.pgyerAPIKey) }
+        didSet {
+            defaults.set(pgyerAPIKey, forKey: Keys.pgyerAPIKey)
+            if usePgyerBuildNumber && pgyerAPIKey != oldValue {
+                buildNumber = ""
+                schedulePgyerBuildLookup()
+            }
+        }
     }
     @Published var pgyerAppKey = "" {
-        didSet { defaults.set(pgyerAppKey, forKey: Keys.pgyerAppKey) }
+        didSet {
+            defaults.set(pgyerAppKey, forKey: Keys.pgyerAppKey)
+            if usePgyerBuildNumber && pgyerAppKey != oldValue {
+                buildNumber = ""
+                schedulePgyerBuildLookup()
+            }
+        }
     }
     @Published var updateDescription = ""
     @Published var sendToFeishu = false {
@@ -275,6 +297,9 @@ final class PackagerViewModel: ObservableObject {
     private var cancellationController: BuildCancellationController?
     private var schemeLookupID = UUID()
     private var buildLookupID = UUID()
+    private var pgyerLookupID = UUID()
+    private var pgyerLookupTask: Task<Void, Never>?
+    private var hasManualVersionOverride = false
     private var hasManualBuildOverride = false
     private var signingLookupID = UUID()
 
@@ -283,6 +308,7 @@ final class PackagerViewModel: ObservableObject {
         elapsedTimeTask?.cancel()
         packageTask?.cancel()
         preparationTask?.cancel()
+        pgyerLookupTask?.cancel()
         cancellationController?.cancel()
         if let preparedWorktree { GitWorktreeManager.cleanup(preparedWorktree) }
 
@@ -300,7 +326,7 @@ final class PackagerViewModel: ObservableObject {
         configuration = Configuration(
             rawValue: defaults.string(forKey: Keys.configuration) ?? ""
         ) ?? .release
-        versionNumber = defaults.string(forKey: Keys.versionNumber) ?? ""
+        versionNumber = ""
         outputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
         uploadToPgyer = platform == .iOS && defaults.bool(forKey: Keys.uploadToPgyer)
         usePgyerBuildNumber = platform == .iOS && defaults.bool(forKey: Keys.usePgyerBuildNumber)
@@ -615,6 +641,19 @@ final class PackagerViewModel: ObservableObject {
         !pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private func schedulePgyerBuildLookup() {
+        pgyerLookupTask?.cancel()
+        pgyerLookupID = UUID()
+        isLoadingPgyerBuildNumber = false
+        guard usePgyerBuildNumber, !isPackaging, isValidVersionNumber,
+              hasPgyerAPIKey, hasPgyerAppKey else { return }
+        pgyerLookupTask = Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            fetchNextBuildNumberFromPgyer()
+        }
+    }
+
     func fetchNextBuildNumberFromPgyer() {
         guard isValidVersionNumber else {
             statusMessage = "版本号格式不正确，例如：1.0 或 1.2.3"
@@ -624,8 +663,9 @@ final class PackagerViewModel: ObservableObject {
             statusMessage = "请填写蒲公英 API Key 和 App Key"
             return
         }
-        guard usePgyerBuildNumber, !isPackaging, !isLoadingPgyerBuildNumber else { return }
-
+        guard usePgyerBuildNumber, !isPackaging else { return }
+        let lookupID = UUID()
+        pgyerLookupID = lookupID
         isLoadingPgyerBuildNumber = true
         statusMessage = "正在查询蒲公英历史版本…"
         let apiKey = pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -639,14 +679,19 @@ final class PackagerViewModel: ObservableObject {
                     appKey: appKey,
                     version: version
                 ) { _ in }
+                guard self.pgyerLookupID == lookupID else { return }
                 self.isLoadingPgyerBuildNumber = false
-                guard self.usePgyerBuildNumber, self.versionNumber.trimmingCharacters(in: .whitespacesAndNewlines) == version else { return }
+                guard self.usePgyerBuildNumber, self.versionNumber.trimmingCharacters(in: .whitespacesAndNewlines) == version,
+                      self.pgyerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines) == apiKey,
+                      self.pgyerAppKey.trimmingCharacters(in: .whitespacesAndNewlines) == appKey else { return }
                 self.buildNumber = String(nextBuild)
                 self.statusMessage = "蒲公英版本 \(version) 的下一 Build 号：\(nextBuild)"
             } catch is CancellationError {
+                guard self.pgyerLookupID == lookupID else { return }
                 self.isLoadingPgyerBuildNumber = false
                 self.statusMessage = "已取消查询蒲公英 Build 号"
             } catch {
+                guard self.pgyerLookupID == lookupID else { return }
                 self.isLoadingPgyerBuildNumber = false
                 self.statusMessage = "蒲公英 Build 号查询失败：\(error.localizedDescription)"
             }
@@ -698,6 +743,11 @@ final class PackagerViewModel: ObservableObject {
         }
     }
 
+    func setVersionNumberManually(_ value: String) {
+        hasManualVersionOverride = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        versionNumber = value
+    }
+
     func setBuildNumberManually(_ value: String) {
         guard !usePgyerBuildNumber else { return }
         buildLookupID = UUID()
@@ -708,7 +758,7 @@ final class PackagerViewModel: ObservableObject {
     func refreshXcodeBuildNumber() {
         let lookupID = UUID()
         buildLookupID = lookupID
-        guard !usePgyerBuildNumber, !isPackaging else { return }
+        guard !isPackaging else { return }
         hasManualBuildOverride = false
 
         let projectPath = containerPath
@@ -716,6 +766,7 @@ final class PackagerViewModel: ObservableObject {
         let selectedConfiguration = configuration
         let selectedPlatform = platform
         guard !projectPath.isEmpty, !selectedScheme.isEmpty else {
+            if !hasManualVersionOverride { versionNumber = "" }
             buildNumber = ""
             return
         }
@@ -737,12 +788,18 @@ final class PackagerViewModel: ObservableObject {
                     cancellation: BuildCancellationController()
                 )
                 await MainActor.run {
-                    guard self.buildLookupID == lookupID,
-                          !self.usePgyerBuildNumber, !self.isPackaging,
+                    guard self.buildLookupID == lookupID, !self.isPackaging,
                           self.containerPath == projectPath, self.scheme == selectedScheme,
                           self.configuration == selectedConfiguration,
                           self.platform == selectedPlatform else { return }
-                    self.buildNumber = version.currentProjectVersion
+                    if !self.hasManualVersionOverride {
+                        self.versionNumber = version.marketingVersion
+                    }
+                    if !self.usePgyerBuildNumber {
+                        self.buildNumber = version.currentProjectVersion
+                    } else if !self.isLoadingPgyerBuildNumber {
+                        self.schedulePgyerBuildLookup()
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -774,12 +831,13 @@ final class PackagerViewModel: ObservableObject {
                     guard self.schemeLookupID == lookupID, self.containerPath == projectPath else { return }
                     self.availableSchemes = schemes
                     if !schemes.contains(self.scheme) {
-                        self.scheme = schemes.count == 1 ? schemes[0] : ""
+                        self.scheme = schemes.first ?? ""
                     }
                     self.isLoadingSchemes = false
                     self.statusMessage = schemes.isEmpty
                         ? "当前工程没有可用的共享 Scheme，请在 Xcode 中检查 Scheme 配置"
-                        : schemes.count == 1 ? "已选择 Scheme：\(schemes[0])" : "请选择要打包的 Scheme"
+                        : "已选择 Scheme：\(self.scheme)"
+                    self.refreshXcodeBuildNumber()
                 }
             } catch {
                 await MainActor.run {
@@ -812,6 +870,11 @@ final class PackagerViewModel: ObservableObject {
         let projectChanged = containerPath != url.path
         containerPath = url.path
         if projectChanged {
+            pgyerLookupTask?.cancel()
+            pgyerLookupID = UUID()
+            buildLookupID = UUID()
+            hasManualVersionOverride = false
+            hasManualBuildOverride = false
             scheme = ""
             availableSchemes = []
             versionNumber = ""
