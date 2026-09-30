@@ -17,6 +17,10 @@ ZXAutoPackager 是一款 macOS SwiftUI 图形化打包工具，用于为 Xcode �
 - 使用多分支功能时，需要 Git、可用的 `origin` 远程分支；若开启 worktree 中的 `pod install`，还需要目标项目的 `Podfile` 和可执行的 `pod`。普通打包不依赖 CocoaPods。
 - 使用蒲公英或飞书功能时，需要相应服务的凭据与网络连接。
 
+## 下载使用
+
+[下载 ZXAutoPackager.zip](https://github.com/a451019070/ZXAutoPackager/blob/main/ZXAutoPackager.zip)（进入 GitHub 文件页面后点击下载）。解压后打开 `ZXAutoPackager.app` 即可使用，无需先编译本工具。应用要求 macOS 26.4 或更高版本；使用打包功能仍需安装 Xcode 及目标项目所需的签名环境。
+
 ## 从源码运行
 
 使用 Xcode 打开 `ZXAutoPackager.xcodeproj`，选择 `ZXAutoPackager` Scheme，点击运行。也可以在仓库根目录执行：
@@ -26,7 +30,7 @@ open ZXAutoPackager.xcodeproj
 xcodebuild -project ZXAutoPackager.xcodeproj -scheme ZXAutoPackager -configuration Debug build
 ```
 
-仓库目前提供 Xcode 工程，未提供预编译安装包或单独的安装脚本。
+仓库同时提供预编译 ZIP 和 Xcode 工程，未提供单独的安装脚本。
 
 ## 使用方法
 
