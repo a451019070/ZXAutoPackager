@@ -15,6 +15,8 @@ struct PackageConfigurationView: View {
                     pathField(
                         viewModel.containerPath,
                         placeholder: "请选择包含 Xcode 工程的项目根目录",
+                        history: viewModel.projectDirectoryHistory,
+                        selectHistory: viewModel.selectProjectFromHistory,
                         action: viewModel.chooseProject
                     )
                 }
@@ -39,6 +41,8 @@ struct PackageConfigurationView: View {
                     pathField(
                         viewModel.outputDirectory,
                         placeholder: "请选择产物保存目录",
+                        history: viewModel.outputDirectoryHistory,
+                        selectHistory: viewModel.selectOutputFromHistory,
                         action: viewModel.chooseOutputDirectory
                     )
                 }
@@ -537,21 +541,46 @@ struct PackageConfigurationView: View {
     private func pathField(
         _ value: String,
         placeholder: String,
+        history: [String],
+        selectHistory: @escaping (String) -> Void,
         action: @escaping () -> Void
     ) -> some View {
         HStack {
-            Text(value.isEmpty ? placeholder : value)
-                .foregroundStyle(value.isEmpty ? .tertiary : .primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 9)
-                .frame(height: 28)
-                .background(.background, in: RoundedRectangle(cornerRadius: 6))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(.quaternary)
+            HStack(spacing: 0) {
+                Text(value.isEmpty ? placeholder : value)
+                    .foregroundStyle(value.isEmpty ? .tertiary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 9)
+                Menu {
+                    ForEach(history, id: \.self) { path in
+                        Button {
+                            selectHistory(path)
+                        } label: {
+                            if path == value {
+                                Label(path, systemImage: "checkmark")
+                            } else {
+                                Text(path)
+                            }
+                        }
+                    }
+                } label: {
+                    Text(" ")
+                        .frame(width: 12, height: 28)
+                        .contentShape(Rectangle())
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(history.isEmpty)
+                .help(history.isEmpty ? "暂无选择记录" : "选择历史目录")
+            }
+            .frame(height: 28)
+            .background(.background, in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(.quaternary)
+            }
             Button("选择…", action: action)
         }
     }

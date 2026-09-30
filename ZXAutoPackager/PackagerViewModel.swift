@@ -141,6 +141,8 @@ final class PackagerViewModel: ObservableObject {
     @Published var outputDirectory = "" {
         didSet { defaults.set(outputDirectory, forKey: Keys.outputDirectory) }
     }
+    @Published private(set) var projectDirectoryHistory: [String] = []
+    @Published private(set) var outputDirectoryHistory: [String] = []
     @Published var uploadToPgyer = false {
         didSet { defaults.set(uploadToPgyer, forKey: Keys.uploadToPgyer) }
     }
@@ -256,6 +258,10 @@ final class PackagerViewModel: ObservableObject {
         static let outputDirectory = "ZXAutoPackager.outputDirectory"
         static let projectBookmark = "ZXAutoPackager.projectBookmark"
         static let outputBookmark = "ZXAutoPackager.outputBookmark"
+        static let projectDirectoryHistory = "ZXAutoPackager.projectDirectoryHistory"
+        static let outputDirectoryHistory = "ZXAutoPackager.outputDirectoryHistory"
+        static let projectBookmarkHistory = "ZXAutoPackager.projectBookmarkHistory"
+        static let outputBookmarkHistory = "ZXAutoPackager.outputBookmarkHistory"
         static let uploadToPgyer = "ZXAutoPackager.uploadToPgyer"
         static let usePgyerBuildNumber = "ZXAutoPackager.usePgyerBuildNumber"
         static let pgyerAPIKey = "ZXAutoPackager.pgyerAPIKey"
@@ -328,6 +334,12 @@ final class PackagerViewModel: ObservableObject {
         ) ?? .release
         versionNumber = ""
         outputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
+        projectDirectoryHistory = defaults.stringArray(forKey: Keys.projectDirectoryHistory) ?? []
+        outputDirectoryHistory = defaults.stringArray(forKey: Keys.outputDirectoryHistory) ?? []
+        migrateDirectoryHistory(path: containerPath, bookmarkKey: Keys.projectBookmark,
+                                bookmarkHistoryKey: Keys.projectBookmarkHistory, isProject: true)
+        migrateDirectoryHistory(path: outputDirectory, bookmarkKey: Keys.outputBookmark,
+                                bookmarkHistoryKey: Keys.outputBookmarkHistory, isProject: false)
         uploadToPgyer = platform == .iOS && defaults.bool(forKey: Keys.uploadToPgyer)
         usePgyerBuildNumber = platform == .iOS && defaults.bool(forKey: Keys.usePgyerBuildNumber)
         pgyerAPIKey = defaults.string(forKey: Keys.pgyerAPIKey) ?? ""
@@ -867,8 +879,20 @@ final class PackagerViewModel: ObservableObject {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         saveBookmark(for: url, key: Keys.projectBookmark)
-        let projectChanged = containerPath != url.path
-        containerPath = url.path
+        recordDirectory(url.path, isProject: true)
+        applyProjectPath(url.path)
+    }
+
+    func selectProjectFromHistory(_ path: String) {
+        guard projectDirectoryHistory.contains(path), pausedMerge == nil else { return }
+        restoreHistoricalBookmark(for: path, isProject: true)
+        recordDirectory(path, isProject: true)
+        applyProjectPath(path)
+    }
+
+    private func applyProjectPath(_ path: String) {
+        let projectChanged = containerPath != path
+        containerPath = path
         if projectChanged {
             pgyerLookupTask?.cancel()
             pgyerLookupID = UUID()
@@ -901,7 +925,16 @@ final class PackagerViewModel: ObservableObject {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         saveBookmark(for: url, key: Keys.outputBookmark)
+        recordDirectory(url.path, isProject: false)
         outputDirectory = url.path
+        statusMessage = "导出目录已选择"
+    }
+
+    func selectOutputFromHistory(_ path: String) {
+        guard outputDirectoryHistory.contains(path) else { return }
+        restoreHistoricalBookmark(for: path, isProject: false)
+        recordDirectory(path, isProject: false)
+        outputDirectory = path
         statusMessage = "导出目录已选择"
     }
 
@@ -1402,6 +1435,43 @@ final class PackagerViewModel: ObservableObject {
         return path == desktopURL.path || path.hasPrefix(desktopURL.path + "/")
     }
 
+    private func migrateDirectoryHistory(path: String, bookmarkKey: String,
+                                         bookmarkHistoryKey: String, isProject: Bool) {
+        guard !path.isEmpty else { return }
+        recordDirectory(path, isProject: isProject)
+        if let data = defaults.data(forKey: bookmarkKey) {
+            var bookmarks = defaults.dictionary(forKey: bookmarkHistoryKey) as? [String: Data] ?? [:]
+            if bookmarks[path] == nil {
+                bookmarks[path] = data
+                defaults.set(bookmarks, forKey: bookmarkHistoryKey)
+            }
+        }
+    }
+
+    private func recordDirectory(_ path: String, isProject: Bool) {
+        let key = isProject ? Keys.projectDirectoryHistory : Keys.outputDirectoryHistory
+        var history = isProject ? projectDirectoryHistory : outputDirectoryHistory
+        history.removeAll { $0 == path }
+        history.insert(path, at: 0)
+        defaults.set(history, forKey: key)
+        if isProject {
+            projectDirectoryHistory = history
+        } else {
+            outputDirectoryHistory = history
+        }
+    }
+
+    private func restoreHistoricalBookmark(for path: String, isProject: Bool) {
+        let historyKey = isProject ? Keys.projectBookmarkHistory : Keys.outputBookmarkHistory
+        let bookmarkKey = isProject ? Keys.projectBookmark : Keys.outputBookmark
+        let bookmarks = defaults.dictionary(forKey: historyKey) as? [String: Data] ?? [:]
+        if let data = bookmarks[path] {
+            defaults.set(data, forKey: bookmarkKey)
+        } else {
+            defaults.removeObject(forKey: bookmarkKey)
+        }
+    }
+
     private func saveBookmark(for url: URL, key: String) {
         do {
             let data = try url.bookmarkData(
@@ -1410,6 +1480,11 @@ final class PackagerViewModel: ObservableObject {
                 relativeTo: nil
             )
             defaults.set(data, forKey: key)
+            let historyKey = key == Keys.projectBookmark
+                ? Keys.projectBookmarkHistory : Keys.outputBookmarkHistory
+            var bookmarks = defaults.dictionary(forKey: historyKey) as? [String: Data] ?? [:]
+            bookmarks[url.standardizedFileURL.path] = data
+            defaults.set(bookmarks, forKey: historyKey)
         } catch {
             statusMessage = "无法保存目录授权：\(error.localizedDescription)"
         }
