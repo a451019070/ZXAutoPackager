@@ -3,25 +3,11 @@ import SwiftUI
 struct PackageView: View {
     @StateObject private var viewModel = PackagerViewModel()
     @State private var isShowingHistory = false
-    @AppStorage("ZXAutoPackager.language") private var language = AppLanguage.system.rawValue
+    
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                PackageHeaderView()
-                Picker("语言", selection: $language) {
-                    Text("跟随系统").tag(AppLanguage.system.rawValue)
-                    Text("简体中文").tag(AppLanguage.chinese.rawValue)
-                    Text("英语").tag(AppLanguage.english.rawValue)
-                }
-                .fixedSize()
-                Button {
-                    isShowingHistory = true
-                } label: {
-                    Label("打包历史", systemImage: "clock.arrow.circlepath")
-                }
-                .padding(.trailing, 24)
-            }
+            PackageHeaderView(isShowingHistory: $isShowingHistory)
             Divider()
             ScrollView {
                 VStack(spacing: 18) {

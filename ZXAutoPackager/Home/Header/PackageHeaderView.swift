@@ -2,6 +2,9 @@ import AppKit
 import SwiftUI
 
 struct PackageHeaderView: View {
+    @AppStorage("ZXAutoPackager.language") private var language = AppLanguage.system.rawValue
+    @Binding var isShowingHistory: Bool
+    
     var body: some View {
         HStack(spacing: 14) {
             Image(nsImage: NSApplication.shared.applicationIconImage)
@@ -16,6 +19,19 @@ struct PackageHeaderView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            
+            Picker("语言", selection: $language) {
+                Text("跟随系统").tag(AppLanguage.system.rawValue)
+                Text("简体中文").tag(AppLanguage.chinese.rawValue)
+                Text("英语").tag(AppLanguage.english.rawValue)
+            }
+            .fixedSize()
+            Button {
+                isShowingHistory = true
+            } label: {
+                Label("打包历史", systemImage: "clock.arrow.circlepath")
+            }
+            .padding(.trailing, 24)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 18)
