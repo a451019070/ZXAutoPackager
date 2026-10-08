@@ -283,6 +283,7 @@ final class PackagerViewModel: ObservableObject {
         static let lastSuccessfulBuild = "ZXAutoPackager.lastSuccessfulBuild"
         static let projectSwitches = "ZXAutoPackager.projectSwitches"
         static let projectOutputDirectories = "ZXAutoPackager.projectOutputDirectories"
+        static let projectOutputDirectoryHistory = "ZXAutoPackager.projectOutputDirectoryHistory"
         static let projectPlatforms = "ZXAutoPackager.projectPlatforms"
     }
 
@@ -378,7 +379,8 @@ final class PackagerViewModel: ObservableObject {
         ) ?? .release
         versionNumber = ""
         projectDirectoryHistory = defaults.stringArray(forKey: Keys.projectDirectoryHistory) ?? []
-        outputDirectoryHistory = defaults.stringArray(forKey: Keys.outputDirectoryHistory) ?? []
+        migrateLegacyOutputHistory()
+        outputDirectoryHistory = outputHistory(for: containerPath)
         migrateDirectoryHistory(path: containerPath, bookmarkKey: Keys.projectBookmark,
                                 bookmarkHistoryKey: Keys.projectBookmarkHistory, isProject: true)
         let legacyOutputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
@@ -460,9 +462,16 @@ final class PackagerViewModel: ObservableObject {
         defaults.removeObject(forKey: Keys.outputDirectory)
     }
 
+    private func migrateLegacyOutputHistory() {
+        // 旧版“导出目录”使用记录是全局共享的，可能混入其他项目的路径，
+        // 无法按项目正确拆分，因此直接丢弃，改为按项目重新积累。
+        defaults.removeObject(forKey: Keys.outputDirectoryHistory)
+    }
+
     private func restoreOutputDirectory(for path: String) {
         let directories = defaults.dictionary(forKey: Keys.projectOutputDirectories) as? [String: String] ?? [:]
         outputDirectory = path.isEmpty ? "" : directories[projectSwitchKey(for: path)] ?? ""
+        outputDirectoryHistory = outputHistory(for: path)
         if !outputDirectory.isEmpty {
             restoreHistoricalBookmark(for: outputDirectory, isProject: false)
         } else {
@@ -476,6 +485,20 @@ final class PackagerViewModel: ObservableObject {
         var directories = defaults.dictionary(forKey: Keys.projectOutputDirectories) as? [String: String] ?? [:]
         directories[projectSwitchKey(for: containerPath)] = path
         defaults.set(directories, forKey: Keys.projectOutputDirectories)
+    }
+
+    private func outputHistory(for path: String) -> [String] {
+        guard !path.isEmpty else { return [] }
+        let all = defaults.dictionary(forKey: Keys.projectOutputDirectoryHistory) as? [String: [String]] ?? [:]
+        return all[projectSwitchKey(for: path)] ?? []
+    }
+
+    private func saveOutputHistory(_ history: [String]) {
+        outputDirectoryHistory = history
+        guard !containerPath.isEmpty else { return }
+        var all = defaults.dictionary(forKey: Keys.projectOutputDirectoryHistory) as? [String: [String]] ?? [:]
+        all[projectSwitchKey(for: containerPath)] = history
+        defaults.set(all, forKey: Keys.projectOutputDirectoryHistory)
     }
 
     private func loadProjectSwitches() -> [String: ProjectSwitches] {
@@ -1612,15 +1635,17 @@ final class PackagerViewModel: ObservableObject {
     }
 
     private func recordDirectory(_ path: String, isProject: Bool) {
-        let key = isProject ? Keys.projectDirectoryHistory : Keys.outputDirectoryHistory
-        var history = isProject ? projectDirectoryHistory : outputDirectoryHistory
-        history.removeAll { $0 == path }
-        history.insert(path, at: 0)
-        defaults.set(history, forKey: key)
         if isProject {
+            var history = projectDirectoryHistory
+            history.removeAll { $0 == path }
+            history.insert(path, at: 0)
+            defaults.set(history, forKey: Keys.projectDirectoryHistory)
             projectDirectoryHistory = history
         } else {
-            outputDirectoryHistory = history
+            var history = outputDirectoryHistory
+            history.removeAll { $0 == path }
+            history.insert(path, at: 0)
+            saveOutputHistory(history)
         }
     }
 
