@@ -1482,7 +1482,8 @@ final class PackagerViewModel: ObservableObject {
                         buildNumber: packageResult.buildNumber,
                         configuration: packageResult.configuration,
                         durationSeconds: self.elapsedSeconds,
-                        downloadURL: uploadResult?.downloadURL
+                        downloadURL: uploadResult?.downloadURL,
+                        updateDescription: updateDescription.isEmpty ? nil : updateDescription
                     ))
                     self.defaults.set(build, forKey: Keys.lastSuccessfulBuild)
                     self.buildNumber = String(build)

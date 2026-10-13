@@ -78,6 +78,15 @@ struct PackageHistoryView: View {
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
 
+            if let updateDescription = record.updateDescription, !updateDescription.isEmpty {
+                Text(updateDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+            }
+
             HStack {
                 Text("\(record.scheme) · \(record.platform)")
                     .font(.caption)
