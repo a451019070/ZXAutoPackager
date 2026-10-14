@@ -556,7 +556,7 @@ final class PackagerViewModel: ObservableObject {
     }
 
     var canPrepareBranches: Bool {
-        useGitBranch && !mergeBranches.isEmpty && !isPreparing && !isPackaging && !isLoadingBranches &&
+        useGitBranch && !isPreparing && !isPackaging && !isLoadingBranches &&
         !containerPath.isEmpty && !selectedBranch.isEmpty &&
         remoteBranches.contains(selectedBranch) &&
         mergeBranches.allSatisfy { remoteBranches.contains($0) }
@@ -567,8 +567,31 @@ final class PackagerViewModel: ObservableObject {
         return FileManager.default.fileExists(atPath: preparedWorktree.projectDirectory.path)
     }
 
+    private var signingProjectPath: String? {
+        Self.signingProjectPath(
+            projectPath: containerPath, useGitBranch: useGitBranch,
+            preparedProjectPath: preparedWorktreeIsCurrent ? preparedWorktree?.projectDirectory.path : nil
+        )
+    }
+
+    nonisolated static func signingProjectPath(
+        projectPath: String, useGitBranch: Bool, preparedProjectPath: String?
+    ) -> String? {
+        useGitBranch ? preparedProjectPath : projectPath
+    }
+
+    private func invalidateSigningProfiles() {
+        signingLookupID = UUID()
+        signingProfileBundleID = nil
+        installedSigningProfiles = []
+        isLoadingSigningProfiles = false
+        signingProfilesMessage = useGitBranch
+            ? "请先准备分支，再选择匹配合并后工程的描述文件。" : nil
+    }
+
     private func discardPreparedWorktree() {
         guard !isPackaging else { return }
+        invalidateSigningProfiles()
         if isPreparing {
             cancellationController?.cancel()
             preparationTask?.cancel()
@@ -633,6 +656,7 @@ final class PackagerViewModel: ObservableObject {
                     self.isPreparing = false
                     self.preparationTask = nil
                     self.cancellationController = nil
+                    if accepted { self.refreshSigningProfiles() }
                     return accepted
                 }
                 if !accepted { GitWorktreeManager.cleanup(context) }
@@ -714,6 +738,7 @@ final class PackagerViewModel: ObservableObject {
                     self.preparationTask = nil
                     self.cancellationController = nil
                     self.statusMessage = "冲突已解决，分支已合并完成，可以开始打包"
+                    self.refreshSigningProfiles()
                 }
             } catch let nextConflict as GitMergeConflict {
                 await MainActor.run {
@@ -1123,9 +1148,14 @@ final class PackagerViewModel: ObservableObject {
 
     func refreshSigningProfiles() {
         guard !isPackaging else { return }
+        guard let signingPath = signingProjectPath else {
+            invalidateSigningProfiles()
+            return
+        }
         let lookupID = UUID()
         signingLookupID = lookupID
         let projectPath = containerPath
+        let preparationConfiguration = currentPreparationConfiguration
         let selectedScheme = scheme.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedConfiguration = configuration.rawValue
         let shouldCheckProject = !projectPath.isEmpty && !selectedScheme.isEmpty
@@ -1148,10 +1178,10 @@ final class PackagerViewModel: ObservableObject {
                 message = "读取 Xcode 描述文件失败：\(error.localizedDescription)"
             }
             if shouldCheckProject {
-                if let projectAccess {
+                if projectAccess != nil {
                     do {
                         bundleID = try XcodePackager.applicationBundleID(
-                            containerPath: projectAccess.url.path, scheme: selectedScheme,
+                            containerPath: signingPath, scheme: selectedScheme,
                             configuration: selectedConfiguration, cancellation: BuildCancellationController()
                         )
                     } catch {
@@ -1166,7 +1196,9 @@ final class PackagerViewModel: ObservableObject {
             await MainActor.run {
                 guard self.signingLookupID == lookupID,
                       self.containerPath == projectPath,
-                      self.scheme == selectedScheme,
+                      self.signingProjectPath == signingPath,
+                      self.currentPreparationConfiguration == preparationConfiguration,
+                      self.scheme.trimmingCharacters(in: .whitespacesAndNewlines) == selectedScheme,
                       self.configuration.rawValue == selectedConfiguration else { return }
                 self.installedSigningProfiles = ManualSigningProfile.eligibleProfiles(
                     from: profiles, bundleID: bundleID
@@ -1284,6 +1316,7 @@ final class PackagerViewModel: ObservableObject {
         let selectedSigningProfileUUID = platform == .iOS ? signingProfileUUID : nil
 
         isPackaging = true
+        invalidateSigningProfiles()
         if shouldClearMergeSelection { mergeBranches = [] }
         elapsedSeconds = 0
         startElapsedTimer()

@@ -207,6 +207,18 @@ nonisolated enum XcodePackager {
                 configuration: request.configuration, profile: manualProfile,
                 buildRoot: projectDirectoryURL, cancellation: cancellation
             )
+            onOutput("===== 指定手动签名 =====\n描述文件：\(manualProfile.name)\nUUID：\(manualProfile.uuid)\n")
+            let signingResult = try runXcodebuild(
+                containerArguments + ["-scheme", request.scheme, "-configuration", request.configuration,
+                                      "-destination", request.platform.destination, "-showBuildSettings", "-json"],
+                cancellation: cancellation, onOutput: { _ in }
+            )
+            guard !cancellation.isCancelled else { throw PackageError.cancelled }
+            guard signingResult.status == 0 else {
+                throw PackageError.commandFailed(signingResult.status, signingResult.output)
+            }
+            try validateEffectiveManualSigning(from: signingResult.output, profile: manualProfile)
+            onOutput("已确认 App 目标的有效构建设置使用所选描述文件。\n")
         }
         try fileManager.createDirectory(at: outputURL, withIntermediateDirectories: true)
 
@@ -376,6 +388,26 @@ nonisolated enum XcodePackager {
         return (pbxproj, original)
     }
 
+    static func validateEffectiveManualSigning(from output: String, profile: ManualSigningProfile) throws {
+        guard let start = output.firstIndex(of: "["), let end = output.lastIndex(of: "]"),
+              let entries = try JSONSerialization.jsonObject(with: Data(output[start...end].utf8)) as? [[String: Any]],
+              let app = entries.first(where: {
+                  ($0["buildSettings"] as? [String: String])?["PRODUCT_TYPE"] == "com.apple.product-type.application"
+              }), let settings = app["buildSettings"] as? [String: String] else {
+            throw PackageError.invalidInput("无法核对 App 目标的有效签名设置。")
+        }
+        let specifier = settings["PROVISIONING_PROFILE_SPECIFIER"] ?? ""
+        let legacyProfile = settings["PROVISIONING_PROFILE"] ?? ""
+        guard settings["CODE_SIGN_STYLE"] == "Manual",
+              settings["DEVELOPMENT_TEAM"] == profile.teamID,
+              specifier.caseInsensitiveCompare(profile.uuid) == .orderedSame,
+              legacyProfile.isEmpty || legacyProfile.caseInsensitiveCompare(profile.uuid) == .orderedSame else {
+            throw PackageError.invalidInput(
+                "所选描述文件未在 App 目标签名设置中生效。所选：\(profile.name)（\(profile.uuid)）；有效描述文件：\(specifier)，旧版设置：\(legacyProfile)。请检查工程条件签名设置或构建覆盖参数。"
+            )
+        }
+    }
+
     static func manuallySignedProject(
         _ data: Data, targetName: String, configuration: String,
         profile: ManualSigningProfile
@@ -401,11 +433,20 @@ nonisolated enum XcodePackager {
             throw PackageError.invalidInput("无法定位 App 目标的 \(configuration) 构建配置。")
         }
         var settings = config["buildSettings"] as? [String: Any] ?? [:]
-        settings["CODE_SIGN_STYLE"] = "Manual"
-        settings["DEVELOPMENT_TEAM"] = profile.teamID
-        settings["PROVISIONING_PROFILE_SPECIFIER"] = profile.uuid
-        settings["PROVISIONING_PROFILE"] = profile.uuid
-        settings["CODE_SIGN_IDENTITY"] = profile.certificateHash
+        let signingSettings = [
+            "CODE_SIGN_STYLE": "Manual",
+            "DEVELOPMENT_TEAM": profile.teamID,
+            "PROVISIONING_PROFILE_SPECIFIER": profile.uuid,
+            "PROVISIONING_PROFILE": profile.uuid,
+            "CODE_SIGN_IDENTITY": profile.certificateHash
+        ]
+        for (key, value) in signingSettings {
+            for conditionalKey in Array(settings.keys) where conditionalKey.hasPrefix(key + "[") {
+                settings[conditionalKey] = value
+            }
+            settings[key] = value
+            settings[key + "[sdk=iphoneos*]"] = value
+        }
         config["buildSettings"] = settings
         objects[configID] = config
         project["objects"] = objects

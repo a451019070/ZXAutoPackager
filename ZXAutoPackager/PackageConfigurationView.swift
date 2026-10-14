@@ -346,7 +346,7 @@ struct PackageConfigurationView: View {
                     Toggle("临时 Worktree 中执行 pod install", isOn: $viewModel.installPods)
                 }
 
-                if !viewModel.mergeBranches.isEmpty || viewModel.isPreparing {
+                if viewModel.useGitBranch {
                     GridRow {
                         fieldTitle("代码准备")
                         HStack(spacing: 12) {
