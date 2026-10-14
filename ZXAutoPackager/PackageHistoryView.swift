@@ -5,18 +5,67 @@ struct PackageHistoryView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var viewModel: PackagerViewModel
     @State private var qrCodeURL: QRCodeURL?
+    @State private var searchText = ""
+    @State private var symbolUploadRecord: PackageHistoryRecord?
+
+    private var searchQuery: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var filteredHistory: [PackageHistoryRecord] {
+        guard !searchQuery.isEmpty else { return viewModel.packageHistory }
+        return viewModel.packageHistory.filter { record in
+            [
+                record.version,
+                "v\(record.version)",
+                String(record.buildNumber),
+                "Build \(record.buildNumber)",
+                record.updateDescription ?? "",
+                record.fileName,
+                record.scheme,
+                record.platform,
+                record.configuration
+            ].contains { $0.localizedStandardContains(searchQuery) }
+        }
+    }
 
     var body: some View {
+        let records = filteredHistory
         VStack(spacing: 0) {
             HStack {
                 Text("打包历史")
                     .font(.title2.bold())
                 Spacer()
-                Text("\(viewModel.packageHistory.count) 条记录")
+                Text(searchQuery.isEmpty
+                     ? "\(viewModel.packageHistory.count) 条记录"
+                     : "\(records.count) / \(viewModel.packageHistory.count) 条记录")
                     .foregroundStyle(.secondary)
                 Button("关闭") { dismiss() }
             }
             .padding(20)
+
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("搜索版本号、Build、更新说明或文件名", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("搜索打包历史")
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("清空搜索")
+                    .accessibilityLabel("清空搜索")
+                }
+            }
+            .padding(10)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
             Divider()
 
             if let error = viewModel.historyError {
@@ -34,10 +83,17 @@ struct PackageHistoryView: View {
                     description: Text("打包成功后会自动保存到这里")
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if records.isEmpty {
+                ContentUnavailableView(
+                    "未找到匹配的历史记录",
+                    systemImage: "magnifyingglass",
+                    description: Text("尝试其他版本号、Build 或更新说明关键词")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(viewModel.packageHistory) { record in
+                        ForEach(records) { record in
                             recordCard(record)
                         }
                     }
@@ -50,6 +106,9 @@ struct PackageHistoryView: View {
             PgyerQRCodeView(downloadURL: item.value) {
                 if let url = URL(string: item.value) { NSWorkspace.shared.open(url) }
             }
+        }
+        .sheet(item: $symbolUploadRecord) { record in
+            SymbolUploadView(viewModel: viewModel, record: record)
         }
     }
 
@@ -109,6 +168,25 @@ struct PackageHistoryView: View {
                 .disabled(!fileExists)
             }
             .controlSize(.small)
+
+            if record.platform.lowercased() == "ios" {
+                HStack {
+                    if let uploadedAt = record.symbolUploads?["bugly"] {
+                        Label("Bugly 工具已完成", systemImage: "checkmark.circle")
+                            .foregroundStyle(.secondary)
+                        Text(uploadedAt, format: .dateTime.month().day().hour().minute())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Menu("上传 dSYM") {
+                        Button("上传到 Bugly…") { symbolUploadRecord = record }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+                .font(.caption)
+                .controlSize(.small)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)

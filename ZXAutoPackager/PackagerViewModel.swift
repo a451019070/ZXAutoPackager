@@ -1799,6 +1799,18 @@ final class PackagerViewModel: ObservableObject {
         }
     }
 
+    func recordSymbolUpload(recordID: UUID, result: SymbolUploadResult) throws {
+        guard let index = packageHistory.firstIndex(where: { $0.id == recordID }) else {
+            throw SymbolUploadError.invalid("历史记录已不存在，无法保存上传结果。")
+        }
+        var updated = packageHistory
+        var uploads = updated[index].symbolUploads ?? [:]
+        uploads[result.providerID] = result.completedAt
+        updated[index].symbolUploads = uploads
+        try historyStore.save(updated)
+        packageHistory = updated
+    }
+
     func showPgyerQRCode() {
         guard pgyerDownloadURL != nil else { return }
         isShowingQRCode = true
