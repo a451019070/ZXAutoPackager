@@ -60,7 +60,7 @@
 "移除" = "Remove";
 "添加合并分支…" = "Add Merge Branch…";
 "不合并其他分支，可直接打包所选远程分支。" = "No other branches to merge; you can package the selected remote branch directly.";
-"已选择合并分支，请先“准备并合并”再打包；冲突会停止准备。" = "Prepare and merge the selected branches before packaging; conflicts will pause preparation.";
+"可先“准备并合并”确认结果，也可直接开始打包自动合并；冲突时会暂停并保留现场。" = "Prepare and merge manually to review the result, or start packaging to merge automatically. Conflicts pause the process and keep the worktree.";
 "依赖" = "Dependencies";
 "临时 Worktree 中执行 pod install" = "Run pod install in the temporary Worktree";
 "代码准备" = "Code Preparation";
@@ -70,7 +70,7 @@
 "检查并继续" = "Check and Continue";
 "放弃并清理" = "Discard and Clean Up";
 "重新准备" = "Prepare Again";
-"准备并合并" = "Prepare and Merge";
+"手动准备并合并" = "Prepare and Merge Manually";
 "已准备完成，可开始打包" = "Ready to package";
 "冲突文件" = "Conflicted Files";
 "在临时目录修改冲突文件，执行 git add 标记已解决，然后点击“检查并继续”。" = "Resolve conflicts in the temporary folder, mark them resolved with git add, then click Check and Continue.";

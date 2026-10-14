@@ -775,7 +775,7 @@ final class PackagerViewModel: ObservableObject {
         (!(uploadToPgyer || usePgyerBuildNumber) || hasPgyerAPIKey) &&
         (!usePgyerBuildNumber || hasPgyerAppKey) &&
         pausedMerge == nil &&
-        (!useGitBranch || (!selectedBranch.isEmpty && (mergeBranches.isEmpty || preparedWorktreeIsCurrent))) &&
+        (!useGitBranch || !selectedBranch.isEmpty) &&
         (!sendToFeishu || FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) != nil)
     }
 
@@ -795,9 +795,6 @@ final class PackagerViewModel: ObservableObject {
         }
         if pausedMerge != nil { return "请先解决冲突并继续合并，或放弃并清理" }
         if useGitBranch && selectedBranch.isEmpty { return "请在高级选项中选择远程分支" }
-        if useGitBranch && !mergeBranches.isEmpty && !preparedWorktreeIsCurrent {
-            return "已选择合并分支，请先准备并合并后再打包"
-        }
         if (uploadToPgyer || usePgyerBuildNumber) && !hasPgyerAPIKey { return "请填写蒲公英 API Key" }
         if usePgyerBuildNumber && !hasPgyerAppKey { return "请填写蒲公英 App Key" }
         if sendToFeishu && FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) == nil { return "请填写有效的飞书机器人 Webhook" }
@@ -1269,7 +1266,12 @@ final class PackagerViewModel: ObservableObject {
         let shouldClearMergeSelection = !mergeBranches.isEmpty
         let branchToBuild = selectedBranch
         let shouldInstallPods = installPods
-        let worktreeContext = preparedWorktree
+        let worktreeContext = preparedWorktreeIsCurrent ? preparedWorktree : nil
+        if worktreeContext == nil, let stale = preparedWorktree {
+            Task.detached(priority: .utility) { GitWorktreeManager.cleanup(stale) }
+        }
+        let autoMergeBranches = worktreeContext == nil && shouldUseGitBranch ? mergeBranches : []
+        let autoPreparationConfiguration = currentPreparationConfiguration
         preparedWorktree = nil
         preparedConfiguration = nil
         hasPreparedWorktree = false
@@ -1315,7 +1317,7 @@ final class PackagerViewModel: ObservableObject {
                         worktreeContext = try GitWorktreeManager.prepare(
                             projectPath: effectiveProjectPath,
                             branch: branchToBuild,
-                            mergeBranches: [],
+                            mergeBranches: autoMergeBranches,
                             installPods: shouldInstallPods,
                             cancellation: cancellation
                         ) { chunk in logBuffer.append(chunk) }
@@ -1489,6 +1491,30 @@ final class PackagerViewModel: ObservableObject {
                     self.buildNumber = String(build)
                     self.updateDescription = ""
                 }
+            } catch let conflict as GitMergeConflict {
+                let accepted = await MainActor.run {
+                    let accepted = !cancellation.isCancelled
+                    self.finishLogRefresh(from: logBuffer)
+                    self.stopElapsedTimer()
+                    self.isPackaging = false
+                    self.isLoadingPgyerBuildNumber = false
+                    self.packageTask = nil
+                    self.cancellationController = nil
+                    if accepted {
+                        self.mergeBranches = autoMergeBranches
+                        self.pausedMerge = conflict
+                        self.preparedConfiguration = autoPreparationConfiguration
+                        self.mergeConflictBranch = conflict.branch
+                        self.mergeConflictFiles = conflict.files
+                        self.appendLog("\n===== 合并冲突：origin/\(conflict.branch) =====\n临时 Worktree：\(conflict.context.worktreeRoot.path)\n\(conflict.output)\n")
+                        self.statusMessage = "合并冲突，打包已暂停；请在临时 Worktree 中解决后点击“检查并继续”，再开始打包"
+                    } else {
+                        self.appendLog("\n===== 已停止打包 =====\n")
+                        self.statusMessage = "打包已停止"
+                    }
+                    return accepted
+                }
+                if !accepted { GitWorktreeManager.cleanup(conflict.context) }
             } catch {
                 await MainActor.run {
                     self.finishLogRefresh(from: logBuffer)
