@@ -109,6 +109,43 @@ struct ZXAutoPackagerTests {
         #expect(buildSettings?["DEVELOPMENT_TEAM"] as? String == "TEAM")
     }
 
+    @Test func manualSigningOverridesConditionalProfileSettings() throws {
+        let project: [String: Any] = ["objects": [
+            "app": ["isa": "PBXNativeTarget", "name": "App",
+                    "productType": "com.apple.product-type.application", "buildConfigurationList": "list"],
+            "list": ["buildConfigurations": ["release"]],
+            "release": ["name": "Release", "buildSettings": [
+                "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": "OldProfile",
+                "PROVISIONING_PROFILE[sdk=iphoneos*][arch=arm64]": "OLD-UUID",
+                "CODE_SIGN_STYLE[sdk=iphoneos*]": "Automatic",
+                "OTHER_LDFLAGS": "-ObjC"
+            ]]
+        ]]
+        let profile = ManualSigningProfile(uuid: "SELECTED-UUID", name: "Selected", teamID: "TEAM",
+            appIdentifier: "TEAM.com.example.app", expiration: .distantFuture,
+            exportMethod: "debugging", certificateHash: "ABC")
+        let source = try PropertyListSerialization.data(fromPropertyList: project, format: .xml, options: 0)
+        let changed = try XcodePackager.manuallySignedProject(
+            source, targetName: "App", configuration: "Release", profile: profile
+        )
+        let edited = try PropertyListSerialization.propertyList(from: changed, format: nil) as! [String: Any]
+        let objects = edited["objects"] as! [String: [String: Any]]
+        let settings = objects["release"]?["buildSettings"] as! [String: String]
+        #expect(settings["PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]"] == profile.uuid)
+        #expect(settings["PROVISIONING_PROFILE[sdk=iphoneos*][arch=arm64]"] == profile.uuid)
+        #expect(settings["CODE_SIGN_STYLE[sdk=iphoneos*]"] == "Manual")
+        #expect(settings["OTHER_LDFLAGS"] == "-ObjC")
+        var effective = settings
+        effective["PRODUCT_TYPE"] = "com.apple.product-type.application"
+        let output = String(decoding: try JSONSerialization.data(withJSONObject: [["buildSettings": effective]]), as: UTF8.self)
+        try XcodePackager.validateEffectiveManualSigning(from: output, profile: profile)
+        effective["PROVISIONING_PROFILE_SPECIFIER"] = "OldProfile"
+        let overridden = String(decoding: try JSONSerialization.data(withJSONObject: [["buildSettings": effective]]), as: UTF8.self)
+        #expect(throws: PackageError.self) {
+            try XcodePackager.validateEffectiveManualSigning(from: overridden, profile: profile)
+        }
+    }
+
     @Test func reportsActualArchivedSigningMismatch() throws {
         let profile = ManualSigningProfile(uuid: UUID().uuidString, name: "Selected", teamID: "TEAM1",
             appIdentifier: "TEAM1.com.example.app", expiration: .distantFuture,
@@ -141,6 +178,18 @@ struct ZXAutoPackagerTests {
             #expect(error.localizedDescription.contains(profile.uuid))
             #expect(error.localizedDescription.contains("OTHER-UUID"))
         }
+    }
+
+    @Test func signingLookupUsesPreparedBranchProjectInsteadOfOriginalProject() {
+        #expect(PackagerViewModel.signingProjectPath(
+            projectPath: "/original", useGitBranch: false, preparedProjectPath: "/merged"
+        ) == "/original")
+        #expect(PackagerViewModel.signingProjectPath(
+            projectPath: "/original", useGitBranch: true, preparedProjectPath: "/merged"
+        ) == "/merged")
+        #expect(PackagerViewModel.signingProjectPath(
+            projectPath: "/original", useGitBranch: true, preparedProjectPath: nil
+        ) == nil)
     }
 
     @Test func manualSigningMatchesExactAndWildcardAppIDs() {

@@ -12,6 +12,8 @@ struct PackageHistoryRecord: Codable, Identifiable {
     let configuration: String
     let durationSeconds: Int
     let downloadURL: String?
+    var updateDescription: String?
+    var symbolUploads: [String: Date]? = nil
 
     var fileName: String { URL(fileURLWithPath: artifactPath).lastPathComponent }
     var fileSizeText: String { ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file) }

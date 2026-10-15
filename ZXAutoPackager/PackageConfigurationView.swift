@@ -335,7 +335,7 @@ struct PackageConfigurationView: View {
                             })
                         Text(viewModel.mergeBranches.isEmpty
                              ? "不合并其他分支，可直接打包所选远程分支。"
-                             : "已选择合并分支，请先“准备并合并”再打包；冲突会停止准备。")
+                             : "可先“准备并合并”确认结果，也可直接开始打包自动合并；冲突时会暂停并保留现场。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -346,7 +346,7 @@ struct PackageConfigurationView: View {
                     Toggle("临时 Worktree 中执行 pod install", isOn: $viewModel.installPods)
                 }
 
-                if !viewModel.mergeBranches.isEmpty || viewModel.isPreparing {
+                if viewModel.useGitBranch {
                     GridRow {
                         fieldTitle("代码准备")
                         HStack(spacing: 12) {
@@ -365,7 +365,7 @@ struct PackageConfigurationView: View {
                                 Button("检查并继续", action: viewModel.continueMerge)
                                 Button("放弃并清理", role: .destructive, action: viewModel.discardMergeConflict)
                             } else {
-                                Button(viewModel.hasPreparedWorktree ? "重新准备" : "准备并合并",
+                                Button(viewModel.hasPreparedWorktree ? "重新准备" : "手动准备并合并",
                                        action: viewModel.prepareBranches)
                                     .disabled(!viewModel.canPrepareBranches)
                             }

@@ -283,6 +283,7 @@ final class PackagerViewModel: ObservableObject {
         static let lastSuccessfulBuild = "ZXAutoPackager.lastSuccessfulBuild"
         static let projectSwitches = "ZXAutoPackager.projectSwitches"
         static let projectOutputDirectories = "ZXAutoPackager.projectOutputDirectories"
+        static let projectOutputDirectoryHistory = "ZXAutoPackager.projectOutputDirectoryHistory"
         static let projectPlatforms = "ZXAutoPackager.projectPlatforms"
     }
 
@@ -378,7 +379,8 @@ final class PackagerViewModel: ObservableObject {
         ) ?? .release
         versionNumber = ""
         projectDirectoryHistory = defaults.stringArray(forKey: Keys.projectDirectoryHistory) ?? []
-        outputDirectoryHistory = defaults.stringArray(forKey: Keys.outputDirectoryHistory) ?? []
+        migrateLegacyOutputHistory()
+        outputDirectoryHistory = outputHistory(for: containerPath)
         migrateDirectoryHistory(path: containerPath, bookmarkKey: Keys.projectBookmark,
                                 bookmarkHistoryKey: Keys.projectBookmarkHistory, isProject: true)
         let legacyOutputDirectory = defaults.string(forKey: Keys.outputDirectory) ?? ""
@@ -460,9 +462,16 @@ final class PackagerViewModel: ObservableObject {
         defaults.removeObject(forKey: Keys.outputDirectory)
     }
 
+    private func migrateLegacyOutputHistory() {
+        // 旧版“导出目录”使用记录是全局共享的，可能混入其他项目的路径，
+        // 无法按项目正确拆分，因此直接丢弃，改为按项目重新积累。
+        defaults.removeObject(forKey: Keys.outputDirectoryHistory)
+    }
+
     private func restoreOutputDirectory(for path: String) {
         let directories = defaults.dictionary(forKey: Keys.projectOutputDirectories) as? [String: String] ?? [:]
         outputDirectory = path.isEmpty ? "" : directories[projectSwitchKey(for: path)] ?? ""
+        outputDirectoryHistory = outputHistory(for: path)
         if !outputDirectory.isEmpty {
             restoreHistoricalBookmark(for: outputDirectory, isProject: false)
         } else {
@@ -476,6 +485,20 @@ final class PackagerViewModel: ObservableObject {
         var directories = defaults.dictionary(forKey: Keys.projectOutputDirectories) as? [String: String] ?? [:]
         directories[projectSwitchKey(for: containerPath)] = path
         defaults.set(directories, forKey: Keys.projectOutputDirectories)
+    }
+
+    private func outputHistory(for path: String) -> [String] {
+        guard !path.isEmpty else { return [] }
+        let all = defaults.dictionary(forKey: Keys.projectOutputDirectoryHistory) as? [String: [String]] ?? [:]
+        return all[projectSwitchKey(for: path)] ?? []
+    }
+
+    private func saveOutputHistory(_ history: [String]) {
+        outputDirectoryHistory = history
+        guard !containerPath.isEmpty else { return }
+        var all = defaults.dictionary(forKey: Keys.projectOutputDirectoryHistory) as? [String: [String]] ?? [:]
+        all[projectSwitchKey(for: containerPath)] = history
+        defaults.set(all, forKey: Keys.projectOutputDirectoryHistory)
     }
 
     private func loadProjectSwitches() -> [String: ProjectSwitches] {
@@ -533,7 +556,7 @@ final class PackagerViewModel: ObservableObject {
     }
 
     var canPrepareBranches: Bool {
-        useGitBranch && !mergeBranches.isEmpty && !isPreparing && !isPackaging && !isLoadingBranches &&
+        useGitBranch && !isPreparing && !isPackaging && !isLoadingBranches &&
         !containerPath.isEmpty && !selectedBranch.isEmpty &&
         remoteBranches.contains(selectedBranch) &&
         mergeBranches.allSatisfy { remoteBranches.contains($0) }
@@ -544,8 +567,31 @@ final class PackagerViewModel: ObservableObject {
         return FileManager.default.fileExists(atPath: preparedWorktree.projectDirectory.path)
     }
 
+    private var signingProjectPath: String? {
+        Self.signingProjectPath(
+            projectPath: containerPath, useGitBranch: useGitBranch,
+            preparedProjectPath: preparedWorktreeIsCurrent ? preparedWorktree?.projectDirectory.path : nil
+        )
+    }
+
+    nonisolated static func signingProjectPath(
+        projectPath: String, useGitBranch: Bool, preparedProjectPath: String?
+    ) -> String? {
+        useGitBranch ? preparedProjectPath : projectPath
+    }
+
+    private func invalidateSigningProfiles() {
+        signingLookupID = UUID()
+        signingProfileBundleID = nil
+        installedSigningProfiles = []
+        isLoadingSigningProfiles = false
+        signingProfilesMessage = useGitBranch
+            ? "请先准备分支，再选择匹配合并后工程的描述文件。" : nil
+    }
+
     private func discardPreparedWorktree() {
         guard !isPackaging else { return }
+        invalidateSigningProfiles()
         if isPreparing {
             cancellationController?.cancel()
             preparationTask?.cancel()
@@ -610,6 +656,7 @@ final class PackagerViewModel: ObservableObject {
                     self.isPreparing = false
                     self.preparationTask = nil
                     self.cancellationController = nil
+                    if accepted { self.refreshSigningProfiles() }
                     return accepted
                 }
                 if !accepted { GitWorktreeManager.cleanup(context) }
@@ -691,6 +738,7 @@ final class PackagerViewModel: ObservableObject {
                     self.preparationTask = nil
                     self.cancellationController = nil
                     self.statusMessage = "冲突已解决，分支已合并完成，可以开始打包"
+                    self.refreshSigningProfiles()
                 }
             } catch let nextConflict as GitMergeConflict {
                 await MainActor.run {
@@ -752,7 +800,7 @@ final class PackagerViewModel: ObservableObject {
         (!(uploadToPgyer || usePgyerBuildNumber) || hasPgyerAPIKey) &&
         (!usePgyerBuildNumber || hasPgyerAppKey) &&
         pausedMerge == nil &&
-        (!useGitBranch || (!selectedBranch.isEmpty && (mergeBranches.isEmpty || preparedWorktreeIsCurrent))) &&
+        (!useGitBranch || !selectedBranch.isEmpty) &&
         (!sendToFeishu || FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) != nil)
     }
 
@@ -772,9 +820,6 @@ final class PackagerViewModel: ObservableObject {
         }
         if pausedMerge != nil { return "请先解决冲突并继续合并，或放弃并清理" }
         if useGitBranch && selectedBranch.isEmpty { return "请在高级选项中选择远程分支" }
-        if useGitBranch && !mergeBranches.isEmpty && !preparedWorktreeIsCurrent {
-            return "已选择合并分支，请先准备并合并后再打包"
-        }
         if (uploadToPgyer || usePgyerBuildNumber) && !hasPgyerAPIKey { return "请填写蒲公英 API Key" }
         if usePgyerBuildNumber && !hasPgyerAppKey { return "请填写蒲公英 App Key" }
         if sendToFeishu && FeishuNotifier.validWebhook(feishuWebhook.trimmingCharacters(in: .whitespacesAndNewlines)) == nil { return "请填写有效的飞书机器人 Webhook" }
@@ -1103,9 +1148,14 @@ final class PackagerViewModel: ObservableObject {
 
     func refreshSigningProfiles() {
         guard !isPackaging else { return }
+        guard let signingPath = signingProjectPath else {
+            invalidateSigningProfiles()
+            return
+        }
         let lookupID = UUID()
         signingLookupID = lookupID
         let projectPath = containerPath
+        let preparationConfiguration = currentPreparationConfiguration
         let selectedScheme = scheme.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedConfiguration = configuration.rawValue
         let shouldCheckProject = !projectPath.isEmpty && !selectedScheme.isEmpty
@@ -1128,10 +1178,10 @@ final class PackagerViewModel: ObservableObject {
                 message = "读取 Xcode 描述文件失败：\(error.localizedDescription)"
             }
             if shouldCheckProject {
-                if let projectAccess {
+                if projectAccess != nil {
                     do {
                         bundleID = try XcodePackager.applicationBundleID(
-                            containerPath: projectAccess.url.path, scheme: selectedScheme,
+                            containerPath: signingPath, scheme: selectedScheme,
                             configuration: selectedConfiguration, cancellation: BuildCancellationController()
                         )
                     } catch {
@@ -1146,7 +1196,9 @@ final class PackagerViewModel: ObservableObject {
             await MainActor.run {
                 guard self.signingLookupID == lookupID,
                       self.containerPath == projectPath,
-                      self.scheme == selectedScheme,
+                      self.signingProjectPath == signingPath,
+                      self.currentPreparationConfiguration == preparationConfiguration,
+                      self.scheme.trimmingCharacters(in: .whitespacesAndNewlines) == selectedScheme,
                       self.configuration.rawValue == selectedConfiguration else { return }
                 self.installedSigningProfiles = ManualSigningProfile.eligibleProfiles(
                     from: profiles, bundleID: bundleID
@@ -1246,7 +1298,12 @@ final class PackagerViewModel: ObservableObject {
         let shouldClearMergeSelection = !mergeBranches.isEmpty
         let branchToBuild = selectedBranch
         let shouldInstallPods = installPods
-        let worktreeContext = preparedWorktree
+        let worktreeContext = preparedWorktreeIsCurrent ? preparedWorktree : nil
+        if worktreeContext == nil, let stale = preparedWorktree {
+            Task.detached(priority: .utility) { GitWorktreeManager.cleanup(stale) }
+        }
+        let autoMergeBranches = worktreeContext == nil && shouldUseGitBranch ? mergeBranches : []
+        let autoPreparationConfiguration = currentPreparationConfiguration
         preparedWorktree = nil
         preparedConfiguration = nil
         hasPreparedWorktree = false
@@ -1259,6 +1316,7 @@ final class PackagerViewModel: ObservableObject {
         let selectedSigningProfileUUID = platform == .iOS ? signingProfileUUID : nil
 
         isPackaging = true
+        invalidateSigningProfiles()
         if shouldClearMergeSelection { mergeBranches = [] }
         elapsedSeconds = 0
         startElapsedTimer()
@@ -1292,7 +1350,7 @@ final class PackagerViewModel: ObservableObject {
                         worktreeContext = try GitWorktreeManager.prepare(
                             projectPath: effectiveProjectPath,
                             branch: branchToBuild,
-                            mergeBranches: [],
+                            mergeBranches: autoMergeBranches,
                             installPods: shouldInstallPods,
                             cancellation: cancellation
                         ) { chunk in logBuffer.append(chunk) }
@@ -1459,12 +1517,37 @@ final class PackagerViewModel: ObservableObject {
                         buildNumber: packageResult.buildNumber,
                         configuration: packageResult.configuration,
                         durationSeconds: self.elapsedSeconds,
-                        downloadURL: uploadResult?.downloadURL
+                        downloadURL: uploadResult?.downloadURL,
+                        updateDescription: updateDescription.isEmpty ? nil : updateDescription
                     ))
                     self.defaults.set(build, forKey: Keys.lastSuccessfulBuild)
                     self.buildNumber = String(build)
                     self.updateDescription = ""
                 }
+            } catch let conflict as GitMergeConflict {
+                let accepted = await MainActor.run {
+                    let accepted = !cancellation.isCancelled
+                    self.finishLogRefresh(from: logBuffer)
+                    self.stopElapsedTimer()
+                    self.isPackaging = false
+                    self.isLoadingPgyerBuildNumber = false
+                    self.packageTask = nil
+                    self.cancellationController = nil
+                    if accepted {
+                        self.mergeBranches = autoMergeBranches
+                        self.pausedMerge = conflict
+                        self.preparedConfiguration = autoPreparationConfiguration
+                        self.mergeConflictBranch = conflict.branch
+                        self.mergeConflictFiles = conflict.files
+                        self.appendLog("\n===== 合并冲突：origin/\(conflict.branch) =====\n临时 Worktree：\(conflict.context.worktreeRoot.path)\n\(conflict.output)\n")
+                        self.statusMessage = "合并冲突，打包已暂停；请在临时 Worktree 中解决后点击“检查并继续”，再开始打包"
+                    } else {
+                        self.appendLog("\n===== 已停止打包 =====\n")
+                        self.statusMessage = "打包已停止"
+                    }
+                    return accepted
+                }
+                if !accepted { GitWorktreeManager.cleanup(conflict.context) }
             } catch {
                 await MainActor.run {
                     self.finishLogRefresh(from: logBuffer)
@@ -1612,15 +1695,17 @@ final class PackagerViewModel: ObservableObject {
     }
 
     private func recordDirectory(_ path: String, isProject: Bool) {
-        let key = isProject ? Keys.projectDirectoryHistory : Keys.outputDirectoryHistory
-        var history = isProject ? projectDirectoryHistory : outputDirectoryHistory
-        history.removeAll { $0 == path }
-        history.insert(path, at: 0)
-        defaults.set(history, forKey: key)
         if isProject {
+            var history = projectDirectoryHistory
+            history.removeAll { $0 == path }
+            history.insert(path, at: 0)
+            defaults.set(history, forKey: Keys.projectDirectoryHistory)
             projectDirectoryHistory = history
         } else {
-            outputDirectoryHistory = history
+            var history = outputDirectoryHistory
+            history.removeAll { $0 == path }
+            history.insert(path, at: 0)
+            saveOutputHistory(history)
         }
     }
 
@@ -1712,6 +1797,18 @@ final class PackagerViewModel: ObservableObject {
         } catch {
             historyError = "保存打包历史失败：\(error.localizedDescription)"
         }
+    }
+
+    func recordSymbolUpload(recordID: UUID, result: SymbolUploadResult) throws {
+        guard let index = packageHistory.firstIndex(where: { $0.id == recordID }) else {
+            throw SymbolUploadError.invalid("历史记录已不存在，无法保存上传结果。")
+        }
+        var updated = packageHistory
+        var uploads = updated[index].symbolUploads ?? [:]
+        uploads[result.providerID] = result.completedAt
+        updated[index].symbolUploads = uploads
+        try historyStore.save(updated)
+        packageHistory = updated
     }
 
     func showPgyerQRCode() {
