@@ -38,7 +38,7 @@ struct PackageView: View {
             }
         }
         .sheet(isPresented: $isShowingHistory) {
-            PackageHistoryView(viewModel: viewModel)
+            PackageHistoryView()
         }
         .sheet(isPresented: $viewModel.isShowingQRCode) {
             if let downloadURL = viewModel.pgyerDownloadURL {

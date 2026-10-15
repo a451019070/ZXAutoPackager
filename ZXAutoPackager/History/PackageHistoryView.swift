@@ -3,7 +3,7 @@ import SwiftUI
 
 struct PackageHistoryView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var viewModel: PackagerViewModel
+    @StateObject private var viewModel = PackageHistoryViewModel()
     @State private var qrCodeURL: QRCodeURL?
     @State private var searchText = ""
     @State private var symbolUploadRecord: PackageHistoryRecord?

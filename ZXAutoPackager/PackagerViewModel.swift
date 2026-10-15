@@ -250,8 +250,6 @@ final class PackagerViewModel: ObservableObject {
     @Published var packageSummary: PackageSummary?
     @Published var pgyerDownloadURL: String?
     @Published var isShowingQRCode = false
-    @Published private(set) var packageHistory: [PackageHistoryRecord] = []
-    @Published private(set) var historyError: String?
 
     private enum Keys {
         static let containerPath = "ZXAutoPackager.containerPath"
@@ -323,7 +321,6 @@ final class PackagerViewModel: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private var isRestoringProjectSwitches = false
-    private let historyStore = PackageHistoryStore()
     private let maximumLogLength = 300_000
     private var logRefreshTask: Task<Void, Never>?
     private var elapsedTimeTask: Task<Void, Never>?
@@ -365,11 +362,6 @@ final class PackagerViewModel: ObservableObject {
     }
 
     init() {
-        do {
-            packageHistory = try historyStore.load()
-        } catch {
-            historyError = "读取打包历史失败：\(error.localizedDescription)"
-        }
         containerPath = defaults.string(forKey: Keys.containerPath) ?? ""
         scheme = defaults.string(forKey: Keys.scheme) ?? ""
         migrateLegacyProjectPlatform()
@@ -1506,20 +1498,24 @@ final class PackagerViewModel: ObservableObject {
                     } else if shouldSendToFeishu {
                         self.statusMessage += "；飞书通知已发送"
                     }
-                    self.recordPackage(PackageHistoryRecord(
-                        id: UUID(),
-                        completedAt: Date(),
-                        scheme: scheme,
-                        platform: platform.rawValue,
-                        artifactPath: packageResult.artifactPath,
-                        fileSize: packageResult.fileSize,
-                        version: packageResult.versionNumber,
-                        buildNumber: packageResult.buildNumber,
-                        configuration: packageResult.configuration,
-                        durationSeconds: self.elapsedSeconds,
-                        downloadURL: uploadResult?.downloadURL,
-                        updateDescription: updateDescription.isEmpty ? nil : updateDescription
-                    ))
+                    do {
+                        try PackageHistoryViewModel.recordPackage(PackageHistoryRecord(
+                            id: UUID(),
+                            completedAt: Date(),
+                            scheme: scheme,
+                            platform: platform.rawValue,
+                            artifactPath: packageResult.artifactPath,
+                            fileSize: packageResult.fileSize,
+                            version: packageResult.versionNumber,
+                            buildNumber: packageResult.buildNumber,
+                            configuration: packageResult.configuration,
+                            durationSeconds: self.elapsedSeconds,
+                            downloadURL: uploadResult?.downloadURL,
+                            updateDescription: updateDescription.isEmpty ? nil : updateDescription
+                        ))
+                    } catch {
+                        self.statusMessage += "；保存打包历史失败：\(error.localizedDescription)"
+                    }
                     self.defaults.set(build, forKey: Keys.lastSuccessfulBuild)
                     self.buildNumber = String(build)
                     self.updateDescription = ""
@@ -1786,29 +1782,6 @@ final class PackagerViewModel: ObservableObject {
 
         saveBookmark(for: fallbackURL, key: bookmarkKey)
         return ScopedDirectoryAccess(url: fallbackURL)
-    }
-
-    private func recordPackage(_ record: PackageHistoryRecord) {
-        do {
-            let updated = [record] + packageHistory
-            try historyStore.save(updated)
-            packageHistory = updated
-            historyError = nil
-        } catch {
-            historyError = "保存打包历史失败：\(error.localizedDescription)"
-        }
-    }
-
-    func recordSymbolUpload(recordID: UUID, result: SymbolUploadResult) throws {
-        guard let index = packageHistory.firstIndex(where: { $0.id == recordID }) else {
-            throw SymbolUploadError.invalid("历史记录已不存在，无法保存上传结果。")
-        }
-        var updated = packageHistory
-        var uploads = updated[index].symbolUploads ?? [:]
-        uploads[result.providerID] = result.completedAt
-        updated[index].symbolUploads = uploads
-        try historyStore.save(updated)
-        packageHistory = updated
     }
 
     func showPgyerQRCode() {

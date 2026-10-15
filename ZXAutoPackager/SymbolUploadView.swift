@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 struct SymbolUploadView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var viewModel: PackagerViewModel
+    @ObservedObject var viewModel: PackageHistoryViewModel
     let record: PackageHistoryRecord
     @State private var appID = ""
     @State private var appKey = ""
