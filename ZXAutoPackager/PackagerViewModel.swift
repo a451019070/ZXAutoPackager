@@ -207,9 +207,9 @@ final class PackagerViewModel: ObservableObject {
     @Published var selectedBranch = "" {
         didSet {
             defaults.set(selectedBranch, forKey: Keys.selectedBranch)
-            if selectedBranch != oldValue { discardPreparedWorktree() }
-            if mergeBranches.contains(selectedBranch) {
-                mergeBranches.removeAll { $0 == selectedBranch }
+            if selectedBranch != oldValue {
+                discardPreparedWorktree()
+                if !mergeBranches.isEmpty { mergeBranches = [] }
             }
         }
     }
@@ -1287,7 +1287,6 @@ final class PackagerViewModel: ObservableObject {
         let shouldUploadToPgyer = uploadToPgyer
         let shouldUsePgyerBuildNumber = usePgyerBuildNumber
         let shouldUseGitBranch = useGitBranch
-        let shouldClearMergeSelection = !mergeBranches.isEmpty
         let branchToBuild = selectedBranch
         let shouldInstallPods = installPods
         let worktreeContext = preparedWorktreeIsCurrent ? preparedWorktree : nil
@@ -1309,7 +1308,6 @@ final class PackagerViewModel: ObservableObject {
 
         isPackaging = true
         invalidateSigningProfiles()
-        if shouldClearMergeSelection { mergeBranches = [] }
         elapsedSeconds = 0
         startElapsedTimer()
         lastArtifactPath = nil
