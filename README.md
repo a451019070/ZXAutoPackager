@@ -72,6 +72,10 @@ xcodebuild -project ZXAutoPackager.xcodeproj -scheme ZXAutoPackager -destination
 | `ZXAutoPackagerTests/` | 单元测试 |
 | `ZXAutoPackagerUITests/` | UI 测试 |
 
+## 联系作者
+
+邮箱：[895843633@qq.com](mailto:895843633@qq.com)
+
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。
