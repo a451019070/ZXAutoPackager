@@ -245,6 +245,7 @@ final class PackagerViewModel: ObservableObject {
     @Published private(set) var mergeConflictBranch: String?
     @Published var elapsedSeconds = 0
     @Published var statusMessage = "请选择工程和导出目录"
+    @Published var isShowingAdvancedOptions = false
     @Published var log = ""
     @Published var lastArtifactPath: String?
     @Published var packageSummary: PackageSummary?
@@ -924,10 +925,12 @@ final class PackagerViewModel: ObservableObject {
         Task.detached(priority: .userInitiated) {
             defer { projectAccess.stop() }
             do {
-                let branches = try GitWorktreeManager.listRemoteBranches(
+                let listing = try GitWorktreeManager.listRemoteBranches(
                     projectPath: projectPath,
                     fetchRemote: fetchRemote
                 )
+                let branches = listing.branches
+                let fetchError = listing.fetchError
                 await MainActor.run {
                     self.remoteBranches = branches
                     if !branches.contains(self.selectedBranch) {
@@ -940,7 +943,11 @@ final class PackagerViewModel: ObservableObject {
                         self.mergeBranches = validMergeBranches
                     }
                     self.isLoadingBranches = false
-                    self.statusMessage = "已读取 \(branches.count) 个远程分支"
+                    if let fetchError {
+                        self.statusMessage = "git fetch 失败，仅显示本地缓存的 \(branches.count) 个分支：\(fetchError)"
+                    } else {
+                        self.statusMessage = "已读取 \(branches.count) 个远程分支"
+                    }
                 }
             } catch {
                 await MainActor.run {

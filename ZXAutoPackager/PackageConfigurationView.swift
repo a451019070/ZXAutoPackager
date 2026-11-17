@@ -117,6 +117,9 @@ struct PackageConfigurationView: View {
         .sheet(isPresented: $showAdvancedOptions) {
             advancedSettings
         }
+        .onChange(of: showAdvancedOptions) { _, showing in
+            viewModel.isShowingAdvancedOptions = showing
+        }
         .onChange(of: viewModel.containerPath) { _, _ in
             if showSigningSettings { viewModel.refreshSigningProfiles() }
             viewModel.refreshXcodeBuildNumber()
@@ -251,8 +254,15 @@ struct PackageConfigurationView: View {
                 advancedOptions
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            HStack {
-                Spacer()
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: (viewModel.isPackaging || viewModel.isPreparing) ? "hourglass" : "info.circle.fill")
+                    .foregroundStyle(.secondary)
+                Text(AppStrings.text(viewModel.statusMessage == "请选择工程和导出目录" || viewModel.statusMessage == "已恢复上次填写的打包配置"
+                     ? viewModel.configurationHint : viewModel.statusMessage))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Button("完成") { showAdvancedOptions = false }
                 .keyboardShortcut(.defaultAction)
             }
@@ -294,7 +304,7 @@ struct PackageConfigurationView: View {
                         .disabled(viewModel.mergeConflictBranch != nil || viewModel.isPreparing)
 
                         Button(AppStrings.text(viewModel.isLoadingBranches ? "刷新中…" : "刷新")) {
-                            viewModel.refreshBranches()
+                            viewModel.refreshBranches(fetchRemote: false)
                         }
                         .disabled(viewModel.isLoadingBranches || viewModel.isPackaging || viewModel.isPreparing || viewModel.mergeConflictBranch != nil)
                     }

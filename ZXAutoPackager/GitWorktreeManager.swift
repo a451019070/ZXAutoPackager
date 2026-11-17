@@ -50,17 +50,21 @@ nonisolated enum GitWorktreeManager {
     static func listRemoteBranches(
         projectPath: String,
         fetchRemote: Bool
-    ) throws -> [String] {
+    ) throws -> (branches: [String], fetchError: String?) {
         let projectURL = URL(fileURLWithPath: projectPath, isDirectory: true)
         let root = try repositoryRoot(for: projectURL)
+        var fetchError: String?
 
         if fetchRemote {
             let fetch = try run(
                 executable: "/usr/bin/git",
-                arguments: ["-C", root.path, "fetch", "origin", "--prune"]
+                arguments: [
+                    "-C", root.path, "fetch", "origin", "--prune",
+                    "+refs/heads/*:refs/remotes/origin/*"
+                ]
             )
-            guard fetch.status == 0 else {
-                throw GitPreparationError.commandFailed("git fetch origin --prune", fetch.status, fetch.output)
+            if fetch.status != 0 {
+                fetchError = fetch.output.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
 
@@ -83,7 +87,7 @@ nonisolated enum GitWorktreeManager {
             .filter { !$0.isEmpty && $0 != "HEAD" }
             .sorted()
         guard !branches.isEmpty else { throw GitPreparationError.noRemoteBranches }
-        return branches
+        return (branches, fetchError)
     }
 
     static func prepare(

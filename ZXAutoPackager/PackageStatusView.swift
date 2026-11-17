@@ -3,35 +3,85 @@ import SwiftUI
 struct PackageStatusView: View {
     @ObservedObject var viewModel: PackagerViewModel
 
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) {
-                statusContent
-                    .frame(width: 300, alignment: .leading)
-                Spacer(minLength: 8)
-                actionButtons
-            }
+    @AppStorage("statusMessageHeight") private var messageHeight: Double = 36
+    @State private var dragStartHeight: Double?
 
-            VStack(alignment: .leading, spacing: 14) {
-                statusContent
-                HStack {
-                    Spacer(minLength: 0)
+    @State private var frozenMessage: String?
+
+    private var currentMessage: String {
+        viewModel.statusMessage == "请选择工程和导出目录" || viewModel.statusMessage == "已恢复上次填写的打包配置"
+            ? viewModel.configurationHint : viewModel.statusMessage
+    }
+
+    private var mainMessage: String {
+        viewModel.isShowingAdvancedOptions ? (frozenMessage ?? currentMessage) : currentMessage
+    }
+
+    private let minMessageHeight: Double = 36
+    private let maxMessageHeight: Double = 500
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) {
+                    statusContent
+                        .frame(width: 300, alignment: .leading)
+                    Spacer(minLength: 8)
                     actionButtons
                 }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    statusContent
+                    HStack {
+                        Spacer(minLength: 0)
+                        actionButtons
+                    }
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            resizeHandle
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
+        .padding(.top, 18)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 6)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .onChange(of: viewModel.isShowingAdvancedOptions) { _, showing in
+            frozenMessage = showing ? currentMessage : nil
+        }
+    }
+
+    private var resizeHandle: some View {
+        Capsule()
+            .fill(Color.secondary.opacity(0.4))
+            .frame(width: 40, height: 4)
+            .frame(maxWidth: .infinity)
+            .frame(height: 12)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { value in
+                        let start = dragStartHeight ?? messageHeight
+                        dragStartHeight = start
+                        messageHeight = min(max(start + value.translation.height, minMessageHeight), maxMessageHeight)
+                    }
+                    .onEnded { _ in dragStartHeight = nil }
+            )
+            .help("上下拖动调整状态区域高度")
     }
 
     private var statusContent: some View {
         HStack(alignment: .top, spacing: 14) {
             statusIcon
             VStack(alignment: .leading, spacing: 3) {
-                Text(AppStrings.text(viewModel.statusMessage == "请选择工程和导出目录" || viewModel.statusMessage == "已恢复上次填写的打包配置"
-                     ? viewModel.configurationHint : viewModel.statusMessage))
-                    .lineLimit(2)
+                ScrollView(.vertical) {
+                    SelectableText(text: AppStrings.text(mainMessage))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: messageHeight)
                 if viewModel.isPreparing {
                     Text("正在准备临时 Worktree…")
                         .font(.caption)
